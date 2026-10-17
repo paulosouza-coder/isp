@@ -21,15 +21,17 @@ pnpm dev                         # API em :3333, web em :5173
 
 Abra http://localhost:5173. Todos os usuários de demonstração usam a senha `Sprint@2026`:
 
-| Usuário | Papel | Para ver |
+Empresa fictícia **Yepnet (demonstração)**:
+
+| Usuário | Perfil | O que enxerga (matriz padrão) |
 |---|---|---|
-| `ana@exemplo.test`, `bruno@exemplo.test` | Vendedor | Só a própria carteira |
-| `supervisor@exemplo.test` | Supervisor + vendedor | Equipe, reatribuição, reabrir oportunidade |
-| `gestor@exemplo.test` | Gestor comercial | Visão gerencial |
-| `analista@exemplo.test` | Marketing/analista | Dados com telefone mascarado, sem criar oportunidade |
-| `financeiro@exemplo.test` | Operações/financeiro | Leitura |
-| `admin@exemplo.test` | Administrador | Auditoria |
+| `carlos@yepnet.test` | Gerência | 100% da empresa + Configurações (usuários, planos, segurança, imagens) |
+| `ana@yepnet.test` | Supervisão (lidera Residencial e Empresarial) | Os dois times que lidera, somados; nunca o time Governo |
+| `lucas@yepnet.test` (Residencial), `rafael@yepnet.test` (Empresarial) | Vendedor | Só a própria carteira e os próprios números |
+| `mariana@yepnet.test` | Vendedora do time Governo (sem supervisora) | Só a própria carteira |
 | `vendedor@outro.test` | Vendedor de **outra empresa** | Teste de isolamento |
+
+Os níveis por módulo (Sem acesso · Próprio · Equipe · Total) são editados em **Configurações → Segurança**. As imagens da marca (logos, mascotes, banner, card do menu) são enviadas em **Configurações → Personalização**; sem imagem, o espaço fica vazio sem quebrar o layout.
 
 Atalhos: `/` busca global · `N` nova oportunidade (fora de campos de texto).
 

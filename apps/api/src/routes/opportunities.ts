@@ -1,15 +1,16 @@
-import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { OpportunityCreate, OpportunityListQuery, OpportunityTransition, OpportunityUpdate } from '@isp/shared';
-import { OPEN_STAGES, TERMINAL_STAGES, validateTransition, type OpportunityStage } from '@isp/domain';
+import { OPEN_STAGES, TERMINAL_STAGES, atLeast, validateTransition, type OpportunityStage } from '@isp/domain';
 import { defineRoute, IdParams } from '../http/route';
 import { conflict, unprocessable } from '../http/errors';
+import type { AuthContext } from '../http/context';
+import type { DbOrTx } from '../db/client';
 import * as s from '../db/schema';
-import {
-  bumpVersion, createOpportunity, loadOpportunity, opportunityDto, opportunityQuery, oppVisibility,
-} from '../services/opportunities';
-import { assertAssignableUser, assertTenantRefs } from '../services/scope';
+import { bumpVersion, createOpportunity, loadOpportunity, opportunityDto, opportunityQuery, oppVisibility, planPrice } from '../services/opportunities';
+import { assertAssignableUser, assertTenantRefs, level, ownerScope } from '../services/scope';
 import { audit } from '../services/audit';
+import { pctDelta } from '../services/metrics';
 
 const SORTS = {
   updated_at: s.opportunities.updatedAt,
@@ -20,13 +21,14 @@ const SORTS = {
   stage: s.opportunities.stage,
 } as const;
 
-const PipelineQuery = z.object({
+const FilterQuery = z.object({
   q: z.string().trim().max(100).optional(),
   ownerId: z.union([z.string().uuid(), z.literal('me')]).optional(),
   sourceId: z.string().uuid().optional(),
+  planId: z.string().uuid().optional(),
 });
 
-function commonFilters(auth: Parameters<typeof oppVisibility>[0], f: { q?: string; ownerId?: string; sourceId?: string }) {
+function filters(auth: AuthContext, f: { q?: string; ownerId?: string; sourceId?: string; planId?: string }) {
   const where: SQL[] = [oppVisibility(auth)];
   if (f.q) {
     const term = `%${f.q.replace(/[%_\\]/g, '\\$&')}%`;
@@ -35,19 +37,63 @@ function commonFilters(auth: Parameters<typeof oppVisibility>[0], f: { q?: strin
   if (f.ownerId === 'me') where.push(eq(s.opportunities.ownerId, auth.userId));
   else if (f.ownerId) where.push(eq(s.opportunities.ownerId, f.ownerId));
   if (f.sourceId) where.push(eq(s.opportunities.sourceId, f.sourceId));
+  if (f.planId) where.push(eq(s.opportunities.planId, f.planId));
   return where;
+}
+
+/**
+ * Indicadores de oportunidades da carteira visível. Comparações só com denominadores equivalentes:
+ * posição atual × posição reconstruída no mesmo instante do mês anterior; vendas do mês até hoje ×
+ * mesmo intervalo do mês anterior. Sem histórico, delta = null.
+ */
+export async function opportunityKpis(db: DbOrTx, auth: AuthContext, module: 'oportunidades' | 'inicio' = 'oportunidades') {
+  const tz = auth.timezone;
+  const vis = ownerScope(auth, module, { tenantId: s.opportunities.tenantId, ownerId: s.opportunities.ownerId, deletedAt: s.opportunities.deletedAt });
+  const openAt = (t: SQL) => sql`${s.opportunities.createdAt} <= ${t} and coalesce(${s.opportunities.wonAt}, ${s.opportunities.lostAt}, 'infinity') > ${t}`;
+  const monthStart = sql`(date_trunc('month', now() at time zone ${tz}) at time zone ${tz})`;
+  const prevMonthStart = sql`(date_trunc('month', (now() at time zone ${tz}) - interval '1 month') at time zone ${tz})`;
+  const prevSameMoment = sql`(now() - interval '1 month')`;
+  const [r] = (
+    await db.execute<{ open: number; open_prev: number; value: string; value_prev: string; working: number; proposals: number; won_mtd: number; won_prev_mtd: number }>(sql`
+      select
+        count(*) filter (where ${s.opportunities.stage} not in ('ganha','perdida'))::int open,
+        count(*) filter (where ${openAt(prevSameMoment)})::int open_prev,
+        coalesce(sum(${s.opportunities.valueCents}) filter (where ${s.opportunities.stage} not in ('ganha','perdida')),0)::bigint value,
+        coalesce(sum(${s.opportunities.valueCents}) filter (where ${openAt(prevSameMoment)}),0)::bigint value_prev,
+        count(*) filter (where ${s.opportunities.stage} in ('qualificacao','cobertura'))::int working,
+        count(*) filter (where ${s.opportunities.proposalStatus} = 'enviada' and ${s.opportunities.stage} not in ('ganha','perdida'))::int proposals,
+        count(*) filter (where ${s.opportunities.wonAt} >= ${monthStart})::int won_mtd,
+        count(*) filter (where ${s.opportunities.wonAt} >= ${prevMonthStart} and ${s.opportunities.wonAt} < ${prevSameMoment})::int won_prev_mtd
+      from ${s.opportunities} where ${vis}`)
+  ).rows;
+  return [
+    { key: 'abertas', label: 'Oportunidades', value: r!.open, delta: pctDelta(r!.open, r!.open_prev), unit: 'count', formula: 'Oportunidades abertas agora × abertas no mesmo dia do mês anterior' },
+    { key: 'valor', label: 'Valor potencial', value: Number(r!.value), delta: pctDelta(Number(r!.value), Number(r!.value_prev)), unit: 'brl_cents', formula: 'Soma do valor mensal (preço do catálogo) das oportunidades abertas' },
+    { key: 'andamento', label: 'Em andamento', value: r!.working, delta: null, unit: 'count', formula: 'Abertas nas etapas Qualificação e Cobertura. Sem histórico de etapa para comparar.' },
+    { key: 'propostas', label: 'Propostas enviadas', value: r!.proposals, delta: null, unit: 'count', formula: 'Abertas com proposta enviada e ainda sem resposta' },
+    { key: 'vendas_mes', label: 'Vendas (mês)', value: r!.won_mtd, delta: pctDelta(r!.won_mtd, r!.won_prev_mtd), unit: 'count', formula: 'Vendas fechadas (ganho comercial) do dia 1 até hoje × mesmo intervalo do mês anterior. Não é contrato confirmado.' },
+  ];
 }
 
 export const opportunityRoutes = [
   defineRoute({
     method: 'GET',
+    url: '/opportunities/summary',
+    summary: 'Indicadores de oportunidades da carteira visível',
+    tag: 'Oportunidades',
+    module: 'oportunidades',
+    handler: async ({ app, auth }) => ({ kpis: await opportunityKpis(app.db, auth) }),
+  }),
+
+  defineRoute({
+    method: 'GET',
     url: '/opportunities',
     summary: 'Lista oportunidades (tabela) com filtros e paginação',
     tag: 'Oportunidades',
-    permission: 'opportunity.read',
+    module: 'oportunidades',
     query: OpportunityListQuery,
     handler: async ({ app, auth, query }) => {
-      const where = commonFilters(auth, query);
+      const where = filters(auth, query);
       if (query.stage) where.push(eq(s.opportunities.stage, query.stage));
       if (query.status === 'abertas') where.push(inArray(s.opportunities.stage, OPEN_STAGES as string[]));
       if (query.status === 'encerradas') where.push(inArray(s.opportunities.stage, TERMINAL_STAGES as unknown as string[]));
@@ -62,42 +108,33 @@ export const opportunityRoutes = [
         app.db.select({ total: sql<number>`count(*)::int` }).from(s.opportunities).innerJoin(s.contacts, eq(s.contacts.id, s.opportunities.contactId)).where(cond),
       ]);
       const now = new Date();
-      return { items: rows.map((r) => opportunityDto(r, auth, now)), page: query.page, pageSize: query.pageSize, total };
+      return { items: rows.map((r) => opportunityDto(r, now)), page: query.page, pageSize: query.pageSize, total };
     },
   }),
 
   defineRoute({
     method: 'GET',
     url: '/pipeline',
-    summary: 'Kanban: colunas configuradas com contagem, valor e cards',
+    summary: 'Kanban: etapas abertas com contagem, valor e cards',
     tag: 'Oportunidades',
-    permission: 'opportunity.read',
-    query: PipelineQuery,
+    module: 'oportunidades',
+    query: FilterQuery,
     handler: async ({ app, auth, query }) => {
       const stages = await app.db
         .select()
         .from(s.pipelineStages)
         .where(and(eq(s.pipelineStages.tenantId, auth.tenantId), eq(s.pipelineStages.active, true)))
         .orderBy(asc(s.pipelineStages.position));
-      const since = new Date(Date.now() - 30 * 86_400_000);
-      const where = commonFilters(auth, query);
-      // abertas: todas; encerradas: só as dos últimos 30 dias, para o quadro não crescer sem limite
-      where.push(or(inArray(s.opportunities.stage, OPEN_STAGES as string[]), gte(s.opportunities.stageChangedAt, since))!);
-      const rows = await opportunityQuery(app.db).where(and(...where)).orderBy(sql`${s.opportunities.nextActionAt} asc nulls last`).limit(1000);
+      const where = filters(auth, query);
+      where.push(inArray(s.opportunities.stage, OPEN_STAGES as string[]));
+      const rows = await opportunityQuery(app.db).where(and(...where)).orderBy(desc(s.opportunities.updatedAt)).limit(1000);
       const now = new Date();
       return {
-        stages: stages.map((st) => {
-          const cards = rows.filter((r) => r.stage === st.key).map((r) => opportunityDto(r, auth, now));
-          return {
-            key: st.key as OpportunityStage,
-            name: st.name,
-            isTerminal: st.isTerminal,
-            count: cards.length,
-            valueCents: cards.reduce((acc, c) => acc + (c.valueCents ?? 0), 0),
-            cards,
-          };
+        stages: stages.filter((st) => !st.isTerminal).map((st) => {
+          const cards = rows.filter((r) => r.stage === st.key).map((r) => opportunityDto(r, now));
+          return { key: st.key as OpportunityStage, name: st.name, isTerminal: st.isTerminal, count: cards.length, valueCents: cards.reduce((a, c) => a + (c.valueCents ?? 0), 0), cards };
         }),
-        terminalWindowDays: 30,
+        terminalStages: stages.filter((st) => st.isTerminal).map((st) => ({ key: st.key, name: st.name })),
         generatedAt: now.toISOString(),
       };
     },
@@ -108,10 +145,9 @@ export const opportunityRoutes = [
     url: '/opportunities',
     summary: 'Cria oportunidade (persistida imediatamente) — abre o workspace Sprint',
     tag: 'Oportunidades',
-    permission: 'opportunity.create',
+    module: 'oportunidades',
     body: OpportunityCreate,
     handler: async ({ app, auth, body, req, reply }) => {
-      if (body.newContact && !auth.permissions.has('customer.create')) throw unprocessable('Sem permissão para criar contato.');
       const opp = await app.db.transaction(async (tx) => {
         const created = await createOpportunity(tx, auth, req, body);
         if (body.leadId) {
@@ -123,7 +159,7 @@ export const opportunityRoutes = [
         return created;
       });
       reply.code(201);
-      return opportunityDto(await loadOpportunity(app.db, auth, opp.id), auth);
+      return opportunityDto(await loadOpportunity(app.db, auth, opp.id));
     },
   }),
 
@@ -132,9 +168,9 @@ export const opportunityRoutes = [
     url: '/opportunities/:id',
     summary: 'Detalhe da oportunidade',
     tag: 'Oportunidades',
-    permission: 'opportunity.read',
+    module: 'oportunidades',
     params: IdParams,
-    handler: async ({ app, auth, params }) => opportunityDto(await loadOpportunity(app.db, auth, params.id), auth),
+    handler: async ({ app, auth, params }) => opportunityDto(await loadOpportunity(app.db, auth, params.id)),
   }),
 
   defineRoute({
@@ -142,18 +178,16 @@ export const opportunityRoutes = [
     url: '/opportunities/:id',
     summary: 'Atualiza campos da oportunidade (não altera etapa nem status externos)',
     tag: 'Oportunidades',
-    permission: 'opportunity.update',
+    module: 'oportunidades',
     params: IdParams,
     body: OpportunityUpdate,
     handler: async ({ app, auth, params, body, req }) => {
       await app.db.transaction(async (tx) => {
         const cur = await loadOpportunity(tx, auth, params.id);
         if (cur.rowVersion !== body.rowVersion) throw conflict(cur.rowVersion);
-        if (body.ownerId && body.ownerId !== cur.ownerId) {
-          await assertAssignableUser(tx, auth, body.ownerId, 'opportunity.assign');
-          if (!auth.permissions.has('opportunity.assign')) throw unprocessable('Sem permissão para reatribuir.');
-        }
+        if (body.ownerId && body.ownerId !== cur.ownerId) await assertAssignableUser(tx, auth, 'oportunidades', body.ownerId);
         await assertTenantRefs(tx, auth, { sourceId: body.sourceId, campaignId: body.campaignId });
+        const plan = body.planId === undefined ? undefined : await planPrice(tx, auth, body.planId);
         const patch = {
           title: body.title ?? undefined,
           ownerId: body.ownerId,
@@ -161,7 +195,8 @@ export const opportunityRoutes = [
           campaignId: body.campaignId,
           channel: body.channel,
           reasons: body.reasons,
-          valueCents: body.valueCents,
+          planId: plan === undefined ? undefined : plan?.id ?? null,
+          valueCents: plan === undefined ? undefined : plan?.priceCents ?? null,
           nextAction: body.nextAction,
           nextActionAt: body.nextActionAt === undefined ? undefined : body.nextActionAt ? new Date(body.nextActionAt) : null,
           notes: body.notes,
@@ -179,6 +214,7 @@ export const opportunityRoutes = [
           .where(and(eq(s.opportunities.id, params.id), eq(s.opportunities.tenantId, auth.tenantId), eq(s.opportunities.rowVersion, body.rowVersion)))
           .returning({ rowVersion: s.opportunities.rowVersion });
         if (!updated.length) throw conflict(cur.rowVersion);
+        if (changed.ownerId) await tx.update(s.contacts).set({ ownerId: body.ownerId! }).where(and(eq(s.contacts.id, cur.contactId), eq(s.contacts.tenantId, auth.tenantId)));
         if (Object.keys(changed).length) {
           await tx.insert(s.opportunityEvents).values({
             tenantId: auth.tenantId,
@@ -191,7 +227,7 @@ export const opportunityRoutes = [
         }
         if (changed.ownerId) await audit(tx, req, { action: 'opportunity.assign', entityType: 'opportunity', entityId: params.id, metadata: changed.ownerId });
       });
-      return opportunityDto(await loadOpportunity(app.db, auth, params.id), auth);
+      return opportunityDto(await loadOpportunity(app.db, auth, params.id));
     },
   }),
 
@@ -200,7 +236,7 @@ export const opportunityRoutes = [
     url: '/opportunities/:id/transition',
     summary: 'Muda a etapa do funil com regras de servidor (409 versão, 422 regra)',
     tag: 'Oportunidades',
-    permission: 'opportunity.update',
+    module: 'oportunidades',
     params: IdParams,
     body: OpportunityTransition,
     handler: async ({ app, auth, params, body, req }) => {
@@ -208,7 +244,8 @@ export const opportunityRoutes = [
         const cur = await loadOpportunity(tx, auth, params.id);
         if (cur.rowVersion !== body.rowVersion) throw conflict(cur.rowVersion);
         const from = cur.stage as OpportunityStage;
-        const v = validateTransition({ from, to: body.toStage, reason: body.reason, lossReason: body.lossReason, confirm: body.confirm, canReopen: auth.permissions.has('opportunity.reopen') });
+        // reabrir venda fechada ou perdida exige nível Equipe (supervisão) ou superior
+        const v = validateTransition({ from, to: body.toStage, reason: body.reason, lossReason: body.lossReason, confirm: body.confirm, canReopen: atLeast(level(auth, 'oportunidades'), 'equipe') });
         if (!v.ok) throw unprocessable(v.message, [{ path: v.code, message: v.message }]);
         const now = new Date();
         const reopening = TERMINAL_STAGES.includes(from);
@@ -241,7 +278,7 @@ export const opportunityRoutes = [
           await audit(tx, req, { action: reopening ? 'opportunity.reopen' : `opportunity.${body.toStage}`, entityType: 'opportunity', entityId: params.id, metadata: { from, to: body.toStage } });
         }
       });
-      return opportunityDto(await loadOpportunity(app.db, auth, params.id), auth);
+      return opportunityDto(await loadOpportunity(app.db, auth, params.id));
     },
   }),
 
@@ -250,10 +287,10 @@ export const opportunityRoutes = [
     url: '/opportunities/:id/timeline',
     summary: 'Linha do tempo: eventos da oportunidade e atividades vinculadas',
     tag: 'Oportunidades',
-    permission: 'opportunity.read',
+    module: 'oportunidades',
     params: IdParams,
     handler: async ({ app, auth, params }) => {
-      await loadOpportunity(app.db, auth, params.id); // checa visibilidade
+      await loadOpportunity(app.db, auth, params.id);
       const events = await app.db
         .select({
           id: s.opportunityEvents.id,

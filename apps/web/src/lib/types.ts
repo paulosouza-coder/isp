@@ -1,31 +1,46 @@
-import type { ActivityPriority, ActivityType, CoverageStatus, ContractRequestStatus, LeadStatus, OpportunityReason, OpportunityStage, ProposalStatus } from '@isp/domain';
+import type { AccessLevel, ActivityPriority, ActivityType, CoverageStatus, ContractRequestStatus, CustomerLifecycle, LeadStatus, Module, OpportunityReason, OpportunityStage, ProposalStatus, Segment } from '@isp/domain';
 
 export type Me = {
-  user: { id: string; name: string; email: string };
+  user: { id: string; name: string; email: string; jobTitle: string | null; hasAvatar: boolean };
   tenant: { id: string; name: string; timezone: string };
-  roles: string[];
-  permissions: string[];
+  profiles: string[];
+  access: Record<Module, AccessLevel>;
   teamIds: string[];
+  teamMemberIds: string[];
 };
 
 export type Paged<T> = { items: T[]; page: number; pageSize: number; total: number };
 
 export type Lookups = {
-  users: { id: string; name: string }[];
+  users: { id: string; name: string; hasAvatar: boolean }[];
   sources: { id: string; name: string }[];
   campaigns: { id: string; name: string; sourceId: string | null }[];
-  stages: { key: OpportunityStage; name: string; position: number; isTerminal: boolean }[];
+  stages: { id: string; key: OpportunityStage; name: string; position: number; isTerminal: boolean }[];
   teams: { id: string; name: string }[];
+  plans: { id: string; name: string; line: string | null; segment: Segment; priceCents: number }[];
+};
+
+export type Kpi = {
+  key: string;
+  label: string;
+  value: number | null;
+  delta: number | null;
+  deltaAbs?: number | null;
+  unit?: 'count' | 'brl_cents' | 'ratio' | 'days';
+  lowerIsBetter?: boolean;
+  formula: string;
 };
 
 export type Lead = {
   id: string;
   status: LeadStatus;
   interests: string[];
+  channel: string | null;
   nextAction: string | null;
   nextActionAt: string | null;
   firstContactAt: string | null;
   lastContactAt: string | null;
+  lastInteractionNote: string | null;
   notes: string | null;
   convertedOpportunityId: string | null;
   createdAt: string;
@@ -34,9 +49,11 @@ export type Lead = {
   name: string;
   phone: string | null;
   email: string | null;
-  piiMasked: boolean;
+  segment: Segment;
+  city: string | null;
   ownerId: string | null;
   ownerName: string | null;
+  ownerHasAvatar: boolean;
   sourceId: string | null;
   sourceName: string | null;
   campaignId: string | null;
@@ -56,6 +73,9 @@ export type Opportunity = {
   reasons: OpportunityReason[];
   channel: string | null;
   valueCents: number | null;
+  planId: string | null;
+  planName: string | null;
+  planLine: string | null;
   nextAction: string | null;
   nextActionAt: string | null;
   notes: string | null;
@@ -70,15 +90,17 @@ export type Opportunity = {
   rowVersion: number;
   leadId: string | null;
   customerId: string | null;
-  customerLifecycle: string | null;
+  customerLifecycle: CustomerLifecycle | null;
   contactId: string;
   contactName: string;
   contactPhone: string | null;
   contactEmail: string | null;
+  contactSegment: Segment;
+  contactCity: string | null;
   contactProvisional: boolean;
-  piiMasked: boolean;
   ownerId: string;
   ownerName: string;
+  ownerHasAvatar: boolean;
   sourceId: string | null;
   sourceName: string | null;
   campaignId: string | null;
@@ -108,6 +130,7 @@ export type Activity = {
   opportunityCode: number | null;
   contactId: string | null;
   contactName: string | null;
+  contactSegment: Segment | null;
   overdue: boolean;
 };
 
@@ -125,16 +148,4 @@ export type TimelineItem = {
   actorName: string | null;
   title?: string;
   activityType?: string;
-};
-
-export type Kpi = {
-  key: string;
-  label: string;
-  value: number | null;
-  previous: number | null;
-  unit: 'count' | 'brl_cents' | 'ratio' | 'days';
-  kind: 'periodo' | 'posicao_atual';
-  formula: string;
-  source: string;
-  note?: string;
 };

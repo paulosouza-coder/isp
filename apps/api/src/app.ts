@@ -16,7 +16,10 @@ import { leadRoutes } from './routes/leads';
 import { opportunityRoutes } from './routes/opportunities';
 import { activityRoutes } from './routes/activities';
 import { contactRoutes } from './routes/contacts';
-import { dashboardRoutes } from './routes/dashboard';
+import { homeRoutes } from './routes/home';
+import { reportRoutes } from './routes/reports';
+import { intelligenceRoutes } from './routes/intelligence';
+import { adminRoutes } from './routes/admin';
 import { metaRoutes } from './routes/meta';
 
 export const API_PREFIX = '/api/v1';
@@ -89,11 +92,14 @@ export async function buildApp(opts: { config: Config; db: DB; logger?: boolean;
   registerRoutes(app, API_PREFIX, [
     ...authRoutes,
     ...metaRoutes,
-    ...dashboardRoutes,
+    ...homeRoutes,
     ...leadRoutes,
     ...opportunityRoutes,
     ...activityRoutes,
     ...contactRoutes,
+    ...reportRoutes,
+    ...intelligenceRoutes,
+    ...adminRoutes,
   ]);
   app.get(`${API_PREFIX}/openapi.json`, async () => buildOpenApi(routeRegistry));
 

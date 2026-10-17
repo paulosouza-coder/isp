@@ -42,3 +42,40 @@ export function isoToLocalInput(v?: string | null) {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}T${pad(x.getHours())}:${pad(x.getMinutes())}`;
 }
+
+export function fmtTime(v?: string | Date | null) {
+  if (!v) return '—';
+  return d(v).toLocaleTimeString('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit' });
+}
+
+const dayKey = (x: Date) => x.toLocaleDateString('en-CA', { timeZone: tz });
+
+/** "Hoje, 10:30" · "Ontem, 16:45" · "Amanhã, 09:00" · "12/05/2026" (como nos designs). */
+export function fmtRelativeShort(v?: string | Date | null) {
+  if (!v) return '—';
+  const x = d(v);
+  const now = new Date();
+  const k = dayKey(x);
+  if (k === dayKey(now)) return `Hoje, ${fmtTime(x)}`;
+  if (k === dayKey(new Date(now.getTime() - 86_400_000))) return `Ontem, ${fmtTime(x)}`;
+  if (k === dayKey(new Date(now.getTime() + 86_400_000))) return `Amanhã, ${fmtTime(x)}`;
+  return fmtDate(x);
+}
+
+export function fmtLongDate(v: Date) {
+  return v.toLocaleDateString('pt-BR', { timeZone: tz, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+export function fmtDayHeading(v: Date) {
+  const now = new Date();
+  const k = dayKey(v);
+  const label = v.toLocaleDateString('pt-BR', { timeZone: tz, day: 'numeric', month: 'long' });
+  if (k === dayKey(now)) return `Hoje, ${label}`;
+  if (k === dayKey(new Date(now.getTime() + 86_400_000))) return `Amanhã, ${label}`;
+  if (k === dayKey(new Date(now.getTime() - 86_400_000))) return `Ontem, ${label}`;
+  const wd = v.toLocaleDateString('pt-BR', { timeZone: tz, weekday: 'long' });
+  return `${wd.charAt(0).toUpperCase()}${wd.slice(1)}, ${label}`;
+}
+
+/** Data local (AAAA-MM-DD) no fuso da empresa. */
+export const localDayKey = (v: string | Date) => dayKey(d(v));

@@ -60,3 +60,11 @@ export function useHotkey(key: string, handler: () => void) {
     return () => document.removeEventListener('keydown', onKey);
   }, [key, handler]);
 }
+
+/** Período padrão: do dia 1 do mês até hoje (datas locais AAAA-MM-DD). */
+export function defaultPeriod() {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: iso(now) };
+}

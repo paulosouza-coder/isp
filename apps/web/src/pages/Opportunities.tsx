@@ -1,109 +1,252 @@
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { KanbanSquare, Plus, Search, Table2 } from 'lucide-react';
-import { OPPORTUNITY_STAGES, REASON_LABELS, STAGE_LABELS } from '@isp/domain';
+import clsx from 'clsx';
+import { DndContext, KeyboardSensor, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type Announcements, type DragEndEvent } from '@dnd-kit/core';
+import { BarChart3, CheckCircle2, ClipboardList, Clock3, Columns3, List, MoreVertical, Plus, Search, Send, SlidersHorizontal, UserRound } from 'lucide-react';
+import { OPPORTUNITY_STAGES, STAGE_LABELS, type OpportunityStage } from '@isp/domain';
 import { api, qs } from '../lib/api';
-import { fmtBRL, fmtDate, fmtDateTime } from '../lib/format';
+import { fmtBRL, fmtRelativeShort } from '../lib/format';
 import { useDebounced, useLookups, useUrlState } from '../lib/hooks';
-import type { Opportunity, Paged } from '../lib/types';
+import type { Kpi, Opportunity, Paged, PipelineStage } from '../lib/types';
 import { useAuth } from '../auth/AuthProvider';
-import { DataTable, type Column } from '../components/ui/DataTable';
-import { Button, EmptyState, ErrorState, Input, LoadingRows, PageHeader, Select } from '../components/ui/primitives';
-import { CoverageChip, ProposalChip, StageChip } from '../components/badges';
+import { Avatar, Button, Chip, EmptyState, ErrorState, Input, KpiCard, LoadingRows, Pagination, Select } from '../components/ui/primitives';
+import { PageHeader } from '../components/layout/PageHeader';
+import { ConfiarFacil } from '../components/brand';
+import { CLOSING_TAG, SourceChip, STAGE_STYLE, StageChip, productLabel } from '../components/badges';
+import { TransitionDialog, needsDialog, type TransitionRequest } from '../features/TransitionDialog';
+import { useTransitionMutation } from '../features/useTransition';
+
+function CardMenu({ opp, onMove }: { opp: Opportunity; onMove: (to: OpportunityStage) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  return (
+    <div className="relative" ref={ref} onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button className="rounded-sm p-0.5 text-ink hover:bg-surface-2" aria-label={`Mover ${opp.contactName} para outra etapa`} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <MoreVertical className="h-[18px] w-[18px]" />
+      </button>
+      {open && (
+        <ul role="menu" className="absolute right-0 z-30 mt-1 w-52 rounded-md border border-line bg-surface py-1 text-sm shadow-overlay">
+          <li className="px-3 py-1 text-xs text-muted">Mover para</li>
+          {OPPORTUNITY_STAGES.filter((s) => s !== opp.stage).map((s) => (
+            <li key={s}>
+              <button role="menuitem" className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2" onClick={() => { setOpen(false); onMove(s); }}>
+                <span className={clsx('h-2.5 w-2.5 rounded-full', STAGE_STYLE[s].badge)} aria-hidden />
+                {STAGE_LABELS[s]}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Card({ opp, onMove, canMove }: { opp: Opportunity; onMove: (o: Opportunity, to: OpportunityStage) => void; canMove: boolean }) {
+  const nav = useNavigate();
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: opp.id, data: { opp }, disabled: !canMove });
+  const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
+  const tag = opp.stage === 'fechamento' ? CLOSING_TAG[opp.contractRequestStatus] : null;
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      aria-roledescription="cartão arrastável"
+      aria-label={`${opp.contactName}, ${opp.planName ?? 'sem plano'}. Espaço para pegar e setas para mover; Enter abre.`}
+      onKeyDown={(e) => {
+        listeners?.onKeyDown?.(e);
+        if (e.key === 'Enter' && !isDragging) nav(`/opportunities/${opp.id}`);
+      }}
+      onClick={() => nav(`/opportunities/${opp.id}`)}
+      className={clsx('cursor-pointer rounded-md bg-surface p-3 shadow-card ring-1 ring-line/70 hover:ring-line-strong', isDragging && 'z-30 opacity-90 shadow-overlay')}
+    >
+      <div className="flex items-start gap-2">
+        <Avatar name={opp.contactName} size={34} tone={0} />
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 break-words text-sm font-bold leading-tight text-ink">{opp.contactName}</p>
+          <p className="truncate text-xs text-muted">{productLabel(opp.contactSegment)}</p>
+          <p className="num mt-1 text-sm font-bold text-ink">{opp.valueCents !== null ? fmtBRL(opp.valueCents) : <span className="font-medium text-muted">Sem plano</span>}</p>
+        </div>
+        <Avatar name={opp.ownerName} userId={opp.ownerId} hasPhoto={opp.ownerHasAvatar} size={24} />
+        {canMove && <CardMenu opp={opp} onMove={(to) => onMove(opp, to)} />}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        {tag ? <Chip tone={tag.tone}>{tag.label}</Chip> : <SourceChip name={opp.sourceName} />}
+        <span className={clsx('text-xs', opp.overdue ? 'font-semibold text-danger' : 'text-muted')}>{fmtRelativeShort(opp.nextActionAt ?? opp.updatedAt)}</span>
+      </div>
+    </li>
+  );
+}
+
+function Column({ stage, children, onAdd }: { stage: PipelineStage; children: React.ReactNode; onAdd: () => void }) {
+  const { setNodeRef, isOver } = useDroppable({ id: stage.key });
+  const st = STAGE_STYLE[stage.key];
+  return (
+    <section ref={setNodeRef} aria-labelledby={`col-${stage.key}`} className={clsx('flex min-w-[214px] flex-1 basis-0 flex-col rounded-lg p-2.5', st.col, isOver && 'ring-2 ring-primary')}>
+      <header className="mb-3 px-1">
+        <div className="flex items-center justify-between">
+          <h2 id={`col-${stage.key}`} className="flex items-center gap-2 text-lg font-bold text-ink">
+            {stage.name}
+            <span className={clsx('num inline-flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 text-xs font-bold text-white', st.badge)}>{stage.count}</span>
+          </h2>
+          <button onClick={onAdd} className={clsx('rounded-sm p-1 hover:bg-white/60', st.text)} aria-label={`Nova oportunidade (${stage.name})`}><Plus className="h-5 w-5" /></button>
+        </div>
+        <p className="num mt-1 text-md text-muted">{fmtBRL(stage.valueCents)}</p>
+      </header>
+      {children}
+    </section>
+  );
+}
 
 export function OpportunitiesPage() {
   const { can } = useAuth();
   const lookups = useLookups();
   const nav = useNavigate();
-  const [f, setF] = useUrlState({ q: '', stage: '', status: 'abertas', ownerId: '', sourceId: '', sort: 'updated_at', dir: 'desc', page: '1' });
+  const [f, setF] = useUrlState({ q: '', ownerId: '', sourceId: '', planId: '', view: 'kanban', status: 'abertas', page: '1', size: '10' });
   const [search, setSearch] = useState(f.q);
   const dq = useDebounced(search);
   useEffect(() => { if (dq !== f.q) setF({ q: dq }); }, [dq]); // eslint-disable-line react-hooks/exhaustive-deps
-  const q = useQuery({ queryKey: ['opportunities', f], queryFn: () => api<Paged<Opportunity>>(`/opportunities${qs({ ...f, pageSize: 25 })}`), placeholderData: keepPreviousData });
+  const kanban = f.view === 'kanban';
+  const filters = { q: f.q, ownerId: f.ownerId, sourceId: f.sourceId, planId: f.planId };
+  const summary = useQuery({ queryKey: ['opportunities', 'summary'], queryFn: () => api<{ kpis: Kpi[] }>('/opportunities/summary') });
+  const pipe = useQuery({ queryKey: ['pipeline', filters], enabled: kanban, queryFn: () => api<{ stages: PipelineStage[] }>(`/pipeline${qs(filters)}`) });
+  const list = useQuery({ queryKey: ['opportunities', 'list', f], enabled: !kanban, placeholderData: keepPreviousData, queryFn: () => api<Paged<Opportunity>>(`/opportunities${qs({ ...filters, status: f.status, page: f.page, pageSize: f.size })}`) });
+  const transition = useTransitionMutation();
+  const [pending, setPending] = useState<(TransitionRequest & { opp: Opportunity }) | null>(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor));
+  const stages = pipe.data?.stages ?? [];
 
-  const columns: Column<Opportunity>[] = [
-    { key: 'code', header: 'Nº', cell: (o) => <span className="num text-muted">OP-{o.code}</span> },
-    { key: 'contact', header: 'Contato', locked: true, sortKey: 'title', cell: (o) => <span><span className="block font-medium">{o.contactName}</span><span className="block max-w-[240px] truncate text-xs text-muted">{o.title}</span></span> },
-    { key: 'stage', header: 'Etapa', sortKey: 'stage', cell: (o) => <StageChip stage={o.stage} /> },
-    { key: 'value', header: 'Valor mensal', sortKey: 'value_cents', align: 'right', cell: (o) => (o.valueCents !== null ? fmtBRL(o.valueCents) : <span className="text-muted">—</span>) },
-    { key: 'reasons', header: 'Motivo', cell: (o) => <span className="text-muted">{o.reasons.map((r) => REASON_LABELS[r]).join(', ') || '—'}</span> },
-    { key: 'source', header: 'Origem', cell: (o) => o.sourceName ?? <span className="text-muted">Não informada</span> },
-    { key: 'owner', header: 'Responsável', cell: (o) => o.ownerName },
-    { key: 'next', header: 'Próxima ação', sortKey: 'next_action_at', cell: (o) => (o.nextActionAt ? <span className={o.overdue ? 'num font-medium text-danger' : 'num'}>{fmtDateTime(o.nextActionAt)}</span> : <span className="text-muted">—</span>) },
-    { key: 'coverage', header: 'Cobertura', cell: (o) => <CoverageChip s={o.coverageStatus} /> },
-    { key: 'proposal', header: 'Proposta', hidden: true, cell: (o) => <ProposalChip s={o.proposalStatus} /> },
-    { key: 'updated', header: 'Atualizada', sortKey: 'updated_at', cell: (o) => <span className="num">{fmtDate(o.updatedAt)}</span> },
+  const requestMove = (opp: Opportunity, to: OpportunityStage) => {
+    if (opp.stage === to) return;
+    if (needsDialog(opp.stage, to)) setPending({ opp, from: opp.stage, to, title: opp.contactName });
+    else transition.mutate({ opp, payload: { toStage: to } });
+  };
+  const onDragEnd = (e: DragEndEvent) => {
+    const opp = e.active.data.current?.opp as Opportunity | undefined;
+    const to = e.over?.id as OpportunityStage | undefined;
+    if (opp && to) requestMove(opp, to);
+  };
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => `Pegou ${(active.data.current?.opp as Opportunity).contactName}.`,
+    onDragOver: ({ over }) => (over ? `Sobre a coluna ${STAGE_LABELS[over.id as OpportunityStage]}.` : 'Fora das colunas.'),
+    onDragEnd: ({ over }) => (over ? `Solto em ${STAGE_LABELS[over.id as OpportunityStage]}.` : 'Movimento cancelado.'),
+    onDragCancel: () => 'Movimento cancelado.',
+  };
+  const kpiLook = [
+    { icon: <UserRound className="h-7 w-7" />, tone: 'blue' as const },
+    { icon: <BarChart3 className="h-7 w-7" />, tone: 'green' as const },
+    { icon: <Clock3 className="h-7 w-7" />, tone: 'orange' as const },
+    { icon: <Send className="h-7 w-7" />, tone: 'purple' as const },
+    { icon: <CheckCircle2 className="h-7 w-7" />, tone: 'green' as const },
   ];
 
   return (
     <div className="mx-auto max-w-[1400px]">
       <PageHeader
+        icon={<ClipboardList className="h-9 w-9" strokeWidth={2.2} />}
         title="Oportunidades"
-        actions={
-          <>
-            <div className="flex rounded-sm border border-line bg-surface p-0.5" role="group" aria-label="Visualização">
-              <Link to={`/pipeline${qs({ q: f.q, ownerId: f.ownerId, sourceId: f.sourceId })}`} className="inline-flex items-center gap-1.5 rounded-sm px-3 py-1 text-sm text-muted hover:text-ink"><KanbanSquare className="h-4 w-4" />Kanban</Link>
-              <span className="inline-flex items-center gap-1.5 rounded-sm bg-primary-soft px-3 py-1 text-sm font-medium text-primary" aria-current="page"><Table2 className="h-4 w-4" />Tabela</span>
-            </div>
-            {can('opportunity.create') && <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => nav('/opportunities/new')}>Nova oportunidade</Button>}
-          </>
-        }
+        subtitle="Visualize e gerencie seu funil de vendas de forma simples."
+        mascot={{ slot: 'mascote_oportunidades', lines: ['Arraste as oportunidades', 'pelo funil e acompanhe', 'o progresso das suas vendas.'], highlight: <ConfiarFacil /> }}
+        actions={<Button variant="primary" size="lg" icon={<Plus className="h-5 w-5" />} onClick={() => nav('/opportunities/new')}>Nova oportunidade</Button>}
       />
-      <div className="panel">
-        <div className="flex flex-wrap items-end gap-2 border-b border-line p-3" role="search">
-          <div className="relative min-w-[200px] flex-1">
-            <label htmlFor="op-q" className="sr-only">Buscar oportunidades</label>
-            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted" aria-hidden />
-            <Input id="op-q" className="pl-8" placeholder="Contato, título ou OP-número" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <Select aria-label="Situação" className="w-auto" value={f.status} onChange={(e) => setF({ status: e.target.value })}>
+
+      <section aria-label="Indicadores" className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {(summary.data?.kpis ?? []).map((k, i) => <KpiCard key={k.key} k={k} icon={kpiLook[i]!.icon} tone={kpiLook[i]!.tone} />)}
+        {!summary.data && Array.from({ length: 5 }).map((_, i) => <div key={i} className="card h-[92px] animate-pulse" />)}
+      </section>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3" role="search">
+        <div className="flex rounded-md border border-line bg-surface p-1" role="group" aria-label="Visualização">
+          <button aria-pressed={kanban} onClick={() => setF({ view: 'kanban' })} className={clsx('flex items-center gap-2 rounded-sm px-4 py-2 text-md', kanban ? 'bg-primary-soft font-semibold text-primary' : 'text-ink')}><Columns3 className="h-5 w-5" />Kanban</button>
+          <button aria-pressed={!kanban} onClick={() => setF({ view: 'lista' })} className={clsx('flex items-center gap-2 rounded-sm px-4 py-2 text-md', !kanban ? 'bg-primary-soft font-semibold text-primary' : 'text-ink')}><List className="h-5 w-5" />Lista</button>
+        </div>
+        <div className="relative min-w-[220px] flex-1 lg:max-w-[250px]">
+          <label htmlFor="op-q" className="sr-only">Buscar oportunidades</label>
+          <Search className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-muted" aria-hidden />
+          <Input id="op-q" className="h-12 pl-10" placeholder="Buscar oportunidades..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        {can('oportunidades', 'equipe') && (
+          <Select aria-label="Responsável" className="h-12 w-auto min-w-[190px]" value={f.ownerId} onChange={(e) => setF({ ownerId: e.target.value })}>
+            <option value="">Todos os responsáveis</option>
+            <option value="me">Minhas</option>
+            {lookups.data?.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </Select>
+        )}
+        <Select aria-label="Origem" className="h-12 w-auto min-w-[170px]" value={f.sourceId} onChange={(e) => setF({ sourceId: e.target.value })}>
+          <option value="">Todas as origens</option>
+          {lookups.data?.sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </Select>
+        <Select aria-label="Plano" className="h-12 w-auto min-w-[160px]" value={f.planId} onChange={(e) => setF({ planId: e.target.value })}>
+          <option value="">Todos os planos</option>
+          {lookups.data?.plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </Select>
+        {!kanban && (
+          <Select aria-label="Situação" className="h-12 w-auto" value={f.status} onChange={(e) => setF({ status: e.target.value })}>
             <option value="abertas">Abertas</option>
             <option value="encerradas">Encerradas</option>
             <option value="todas">Todas</option>
           </Select>
-          <Select aria-label="Etapa" className="w-auto" value={f.stage} onChange={(e) => setF({ stage: e.target.value })}>
-            <option value="">Todas as etapas</option>
-            {OPPORTUNITY_STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s]}</option>)}
-          </Select>
-          {can('opportunity.read_all') && (
-            <Select aria-label="Responsável" className="w-auto" value={f.ownerId} onChange={(e) => setF({ ownerId: e.target.value })}>
-              <option value="">Toda a equipe</option>
-              <option value="me">Minhas</option>
-              {lookups.data?.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </Select>
-          )}
-          <Select aria-label="Origem" className="w-auto" value={f.sourceId} onChange={(e) => setF({ sourceId: e.target.value })}>
-            <option value="">Todas as origens</option>
-            {lookups.data?.sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select>
-        </div>
-        {q.isLoading ? (
-          <LoadingRows />
-        ) : q.isError ? (
-          <ErrorState error={q.error} onRetry={() => q.refetch()} />
-        ) : !q.data?.items.length ? (
-          <EmptyState title="Nenhuma oportunidade encontrada" description="Ajuste os filtros ou abra um novo Sprint." action={can('opportunity.create') ? <Button variant="primary" onClick={() => nav('/opportunities/new')}>Nova oportunidade</Button> : undefined} />
-        ) : (
-          <DataTable
-            caption="Lista de oportunidades"
-            storageKey="opportunities"
-            rows={q.data.items}
-            columns={columns}
-            getId={(o) => o.id}
-            sort={{ key: f.sort, dir: f.dir as 'asc' | 'desc' }}
-            onSort={(k) => setF({ sort: k, dir: f.sort === k && f.dir === 'desc' ? 'asc' : 'desc' })}
-            onRowClick={(o) => nav(`/opportunities/${o.id}`)}
-            page={{ page: q.data.page, pageSize: q.data.pageSize, total: q.data.total, onPage: (p) => setF({ page: String(p) }) }}
-            mobileCard={(o) => (
-              <div className="space-y-1">
-                <p className="flex items-center justify-between gap-2"><span className="font-medium">{o.contactName}</span><StageChip stage={o.stage} /></p>
-                <p className="text-sm text-muted">OP-{o.code} · {o.valueCents !== null ? fmtBRL(o.valueCents) : 'sem valor'} · {o.ownerName}</p>
-              </div>
-            )}
-          />
         )}
+        <Button size="lg" className="ml-auto" icon={<SlidersHorizontal className="h-5 w-5" />} onClick={() => { setSearch(''); setF({ q: '', ownerId: '', sourceId: '', planId: '' }); }} title="Limpar filtros">Filtros</Button>
       </div>
+
+      {kanban ? (
+        pipe.isLoading ? <div className="card"><LoadingRows /></div> : pipe.isError ? <ErrorState error={pipe.error} onRetry={() => pipe.refetch()} /> : (
+          <DndContext sensors={sensors} onDragEnd={onDragEnd} accessibility={{ announcements, screenReaderInstructions: { draggable: 'Pressione espaço para pegar o cartão, use as setas para escolher a coluna e espaço para soltar. Esc cancela. Também é possível usar o menu do cartão.' } }}>
+            <div className="scroll-thin -mx-4 flex gap-3 overflow-x-auto px-4 pb-4 sm:-mx-6 sm:px-6">
+              {stages.map((s) => (
+                <Column key={s.key} stage={s} onAdd={() => nav('/opportunities/new')}>
+                  <ul className="flex min-h-[120px] flex-col gap-3">
+                    {s.cards.map((c) => <Card key={c.id} opp={c} onMove={requestMove} canMove={can('oportunidades')} />)}
+                    {s.cards.length === 0 && <li className="rounded-md border border-dashed border-line-strong/60 px-3 py-6 text-center text-sm text-muted">Nenhuma oportunidade</li>}
+                  </ul>
+                </Column>
+              ))}
+            </div>
+          </DndContext>
+        )
+      ) : list.isLoading ? <div className="card"><LoadingRows /></div> : list.isError ? <ErrorState error={list.error} onRetry={() => list.refetch()} /> : !list.data?.items.length ? (
+        <div className="card"><EmptyState title="Nenhuma oportunidade encontrada" description="Ajuste os filtros ou abra um novo Sprint." /></div>
+      ) : (
+        <div className="card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[960px] text-left">
+              <caption className="sr-only">Lista de oportunidades</caption>
+              <thead className="bg-surface-2 text-sm text-muted">
+                <tr>{['Cliente', 'Plano', 'Valor', 'Etapa', 'Origem', 'Responsável', 'Próxima ação'].map((h) => <th key={h} scope="col" className="px-4 py-3 font-medium">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {list.data.items.map((o) => (
+                  <tr key={o.id} className="cursor-pointer border-t border-line hover:bg-surface-2/60" onClick={() => nav(`/opportunities/${o.id}`)}>
+                    <td className="px-4 py-3"><span className="flex items-center gap-3"><Avatar name={o.contactName} size={38} tone={0} /><span><span className="block font-semibold text-ink">{o.contactName}</span><span className="block text-xs text-muted">OP-{o.code} · {productLabel(o.contactSegment)}</span></span></span></td>
+                    <td className="px-4 py-3 text-sm"><span className="block font-semibold text-ink">{o.planName ?? '—'}</span><span className="block text-xs text-muted">{o.planLine ?? ''}</span></td>
+                    <td className="num px-4 py-3 text-sm font-semibold text-ink">{o.valueCents !== null ? fmtBRL(o.valueCents) : '—'}</td>
+                    <td className="px-4 py-3"><StageChip stage={o.stage} /></td>
+                    <td className="px-4 py-3"><SourceChip name={o.sourceName} /></td>
+                    <td className="px-4 py-3"><span className="flex items-center gap-2 whitespace-nowrap text-sm"><Avatar name={o.ownerName} userId={o.ownerId} hasPhoto={o.ownerHasAvatar} size={28} />{o.ownerName}</span></td>
+                    <td className={clsx('px-4 py-3 text-sm', o.overdue ? 'font-semibold text-danger' : 'text-text')}>{o.nextActionAt ? fmtRelativeShort(o.nextActionAt) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination noun="oportunidades" page={list.data.page} pageSize={list.data.pageSize} total={list.data.total} onPage={(p) => setF({ page: String(p) }, { resetPage: false })} onPageSize={(s) => setF({ size: String(s) })} />
+        </div>
+      )}
+
+      <TransitionDialog
+        request={pending}
+        loading={transition.isPending}
+        onCancel={() => setPending(null)}
+        onConfirm={(payload) => { if (pending) transition.mutate({ opp: pending.opp, payload }, { onSettled: () => setPending(null) }); }}
+      />
     </div>
   );
 }

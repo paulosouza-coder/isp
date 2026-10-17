@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
-  OPPORTUNITY_STAGES, LEAD_STATUSES, OPPORTUNITY_REASONS, LOSS_REASONS, ACTIVITY_TYPES, ACTIVITY_PRIORITIES,
+  OPPORTUNITY_STAGES, LEAD_STATUSES, OPPORTUNITY_REASONS, LOSS_REASONS, ACTIVITY_TYPES, ACTIVITY_PRIORITIES, SEGMENTS, CUSTOMER_LIFECYCLES,
+  MODULES, ACCESS_LEVELS, PROFILE_KEYS,
 } from '@isp/domain';
 
 const trimmed = (max: number) => z.string().trim().max(max);
@@ -37,6 +38,9 @@ export const ContactCreate = z.object({
   name: trimmed(160).min(2, 'Informe ao menos 2 caracteres'),
   phone,
   email,
+  segment: z.enum(SEGMENTS).default('residencial'),
+  city: optText(80),
+  ownerId: uuid.optional().nullable(),
 });
 export type ContactCreate = z.infer<typeof ContactCreate>;
 
@@ -47,6 +51,7 @@ export const LeadListQuery = PageQuery.extend({
   status: z.enum(LEAD_STATUSES).optional(),
   ownerId: z.union([uuid, z.literal('me'), z.literal('none')]).optional(),
   sourceId: uuid.optional(),
+  channel: trimmed(40).optional(),
   sort: z.enum(LEAD_SORTS).default('created_at'),
   dir: z.enum(['asc', 'desc']).default('desc'),
 });
@@ -56,6 +61,10 @@ export const LeadCreate = z.object({
   name: trimmed(160).min(2, 'Informe ao menos 2 caracteres'),
   phone,
   email,
+  segment: z.enum(SEGMENTS).default('residencial'),
+  city: optText(80),
+  channel: optText(40),
+  lastInteractionNote: optText(120),
   sourceId: uuid.optional().nullable(),
   campaignId: uuid.optional().nullable(),
   interests: z.array(trimmed(40).min(1)).max(10).default([]),
@@ -85,6 +94,7 @@ export const OpportunityListQuery = PageQuery.extend({
   stage: z.enum(OPPORTUNITY_STAGES).optional(),
   ownerId: z.union([uuid, z.literal('me')]).optional(),
   sourceId: uuid.optional(),
+  planId: uuid.optional(),
   status: z.enum(['abertas', 'encerradas', 'todas']).default('abertas'),
   sort: z.enum(OPPORTUNITY_SORTS).default('updated_at'),
   dir: z.enum(['asc', 'desc']).default('desc'),
@@ -102,7 +112,7 @@ export const OpportunityCreate = z
     channel: optText(40),
     reasons: z.array(z.enum(OPPORTUNITY_REASONS)).max(6).default([]),
     ownerId: uuid.optional().nullable(),
-    valueCents: cents.optional().nullable(),
+    planId: uuid.optional().nullable(),
   })
   .refine((v) => !!v.contactId !== !!v.newContact, {
     message: 'Selecione um contato existente ou informe um novo contato (apenas um).',
@@ -117,7 +127,8 @@ export const OpportunityUpdate = z.object({
   campaignId: uuid.optional().nullable(),
   channel: optText(40),
   reasons: z.array(z.enum(OPPORTUNITY_REASONS)).max(6).optional(),
-  valueCents: cents.optional().nullable(),
+  /** O valor vem do catálogo: escolher o plano define o preço. Não há valor digitado. */
+  planId: uuid.optional().nullable(),
   nextAction: optText(200),
   nextActionAt: isoDate.optional().nullable(),
   notes: optText(4000),
@@ -138,6 +149,12 @@ export type OpportunityTransition = z.infer<typeof OpportunityTransition>;
 export const ActivityListQuery = PageQuery.extend({
   scope: z.enum(['minhas', 'equipe']).default('minhas'),
   status: z.enum(['abertas', 'atrasadas', 'hoje', 'concluidas', 'todas']).default('abertas'),
+  type: z.enum(ACTIVITY_TYPES).optional(),
+  ownerId: uuid.optional(),
+  q: trimmed(100).optional(),
+  /** Dia de início da agenda (AAAA-MM-DD, fuso da empresa) e quantos dias mostrar. */
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  days: z.coerce.number().int().min(1).max(31).optional(),
   opportunityId: uuid.optional(),
   leadId: uuid.optional(),
   contactId: uuid.optional(),
@@ -171,8 +188,64 @@ export type ActivityUpdate = z.infer<typeof ActivityUpdate>;
 // ------------------------------------------------------------------ clientes
 export const CustomerListQuery = PageQuery.extend({
   q: trimmed(100).optional(),
-  lifecycle: z.enum(['prospect', 'ativo', 'suspenso', 'cancelado', 'reativado']).optional(),
+  lifecycle: z.enum(CUSTOMER_LIFECYCLES).optional(),
+  segment: z.enum(SEGMENTS).optional(),
+  planId: uuid.optional(),
+  ownerId: uuid.optional(),
 });
+
+// ------------------------------------------------------------------ relatórios e inteligência
+export const PeriodQuery = z
+  .object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })
+  .refine((v) => v.from <= v.to, { message: 'A data inicial deve ser anterior à final', path: ['from'] });
+
+// ------------------------------------------------------------------ administração
+export const SecurityUpdate = z.object({
+  profile: z.enum(PROFILE_KEYS),
+  module: z.enum(MODULES),
+  level: z.enum(ACCESS_LEVELS),
+});
+export const UserCreate = z.object({
+  name: trimmed(120).min(2),
+  email: z.string().trim().toLowerCase().email().max(200),
+  jobTitle: optText(80),
+  profile: z.enum(PROFILE_KEYS),
+  teamIds: z.array(uuid).max(20).default([]),
+  leadTeamIds: z.array(uuid).max(20).default([]),
+});
+export const UserUpdate = z.object({
+  name: trimmed(120).min(2).optional(),
+  jobTitle: optText(80),
+  profile: z.enum(PROFILE_KEYS).optional(),
+  active: z.boolean().optional(),
+  teamIds: z.array(uuid).max(20).optional(),
+  leadTeamIds: z.array(uuid).max(20).optional(),
+  goalSales: z.number().int().min(0).max(100_000).optional(),
+  goalProposals: z.number().int().min(0).max(100_000).optional(),
+  goalLeads: z.number().int().min(0).max(100_000).optional(),
+});
+export const PlanUpsert = z.object({
+  name: trimmed(80).min(2),
+  line: optText(80),
+  segment: z.enum(SEGMENTS),
+  priceCents: z.number().int().min(0).max(100_000_00),
+  active: z.boolean().default(true),
+});
+export const SourceUpsert = z.object({ name: trimmed(60).min(2), active: z.boolean().default(true) });
+export const StageRename = z.object({ name: trimmed(40).min(2) });
+export const BRAND_SLOTS = [
+  'logo_escuro', 'logo_claro', 'favicon', 'banner_inicio', 'card_sidebar',
+  'mascote_leads', 'mascote_oportunidades', 'mascote_clientes', 'mascote_atividades', 'mascote_relatorios', 'mascote_inteligencia', 'mascote_administracao',
+] as const;
+export type BrandSlot = (typeof BRAND_SLOTS)[number];
+export const ImageUpload = z.object({
+  /** Arquivo em base64 (sem prefixo data:). Tipo validado pelos bytes no servidor. */
+  data: z.string().min(16).max(3_000_000),
+});
+export const PasswordChange = z.object({ current: z.string().min(1).max(200), next: z.string().min(10, 'Use ao menos 10 caracteres').max(200) });
 
 // ------------------------------------------------------------------ dashboard
 export const DashboardQuery = z.object({

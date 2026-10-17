@@ -24,11 +24,11 @@ export function buildOpenApi(routes: RouteDef[]) {
       tags: [r.tag],
       parameters,
       security: r.public ? [] : [{ session: [] }],
-      'x-permissions': r.permission ? ([] as string[]).concat(r.permission) : r.anyAuthenticated ? ['(autenticado)'] : [],
+      'x-access': r.module ? `${r.module}:${r.min ?? 'proprio'}` : r.anyAuthenticated ? '(autenticado)' : 'público',
       responses: {
         '200': { description: 'OK' },
         '401': { description: 'Não autenticado', content: { 'application/problem+json': {} } },
-        '403': { description: 'Sem permissão' },
+        '403': { description: 'Nível de acesso insuficiente no módulo' },
         '404': { description: 'Não encontrado (inclui registros de outra empresa)' },
         '409': { description: 'Conflito de versão (rowVersion)' },
         '422': { description: 'Validação ou regra de negócio' },

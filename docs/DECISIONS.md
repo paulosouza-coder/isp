@@ -52,3 +52,21 @@ Debounce de 900 ms, `PATCH` só dos campos alterados com `rowVersion`; rascunho 
 
 ## ADR-015 — E2E isolado
 Playwright sobe API (:3334) e web (:5174) próprios contra `isp_sprint_test`, recriado no início. `PW_CHROMIUM_PATH` permite usar Chromium local quando o download é bloqueado.
+
+## ADR-016 — Níveis de acesso por módulo e por perfil (substitui as 31 permissões)
+Pedido do cliente (17/10): “no painel de configuração consiga setar níveis de segurança por módulo”. Modelo: 9 módulos × 4 níveis (`nenhum`, `proprio`, `equipe`, `total`), por **perfil** (Vendedor, Supervisão, Gerência) — não por pessoa. Padrão: Vendedor = Próprio (sem Campanhas, Inteligência, Configurações); Supervisão = Equipe; Gerência = Total, inclusive Configurações. Configurações só aceita Sem acesso/Total, e a Gerência não pode perder Configurações (evita trancar a empresa fora). “Equipe” = membros dos times que o usuário **lidera** (`team_memberships.is_lead`), somados, mais registros sem dono. Cada rota declara `module` + nível mínimo; o filtro de dono (`ownerScope`) é aplicado em SQL em toda consulta. A tela esconde o que a API já recusa.
+
+## ADR-017 — Dados sensíveis e ranking
+Decisão do cliente: o vendedor vê os dados de venda completos da própria carteira (sem máscara de telefone) e só os próprios números — o ranking do time aparece a partir do nível Equipe. Removida a máscara de PII por papel da Fase 1.
+
+## ADR-018 — Valor da oportunidade vem do catálogo de planos
+O vendedor escolhe o plano; o servidor grava `plan_id` e copia `price_cents` do catálogo (`plans`, origem `catalogo_manual` até a integração IXC). Não existe mais valor digitado. Preço mudou depois? A oportunidade guarda o valor do momento em que o plano foi escolhido.
+
+## ADR-019 — Funil Yepnet e “Venda fechada”
+Etapas: Novo lead → Qualificação → Cobertura → Proposta → Fechamento → Venda fechada / Perdido (migration 0002 mapeia as etapas antigas). “Venda fechada” é ganho comercial; contrato só conta como confirmado com validação externa (IXC). Receita nos relatórios = soma do valor mensal de catálogo das vendas fechadas, não faturamento — explicado no “Como é calculado” de cada indicador.
+
+## ADR-020 — Imagens da marca no banco, sem SVG
+12 espaços (`brand_assets`, por empresa) e fotos de usuário (`user_avatars`) em `bytea`, até 2 MB, tipo detectado pelos bytes (PNG/JPEG/WebP). SVG recusado (pode carregar script). Só a logo e o favicon têm rota pública (tela de login); os demais exigem sessão. Textos dos balões são fixos (decisão do cliente: “não edita os balões”).
+
+## ADR-021 — Insights por regra fixa
+“Principais insights” da Inteligência são frases geradas por regras sobre os números exibidos, com amostra mínima de 10 registros e o `n` visível. Mostram associação, não causa. Nada de modelo generativo aqui.

@@ -1,30 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
   validateTransition, leadTemperature, leadSla, isOverdue, maskPhone, maskEmail, toCents, formatBRL, csvSafe,
-  DEFAULT_ROLE_PERMISSIONS, hasPermission,
+  DEFAULT_ACCESS, atLeast, mergeLevels, allowedLevels,
 } from './index';
 
 describe('transições de etapa', () => {
   it('permite mover livremente entre etapas abertas', () => {
-    expect(validateTransition({ from: 'novo', to: 'oferta', canReopen: false })).toEqual({ ok: true });
-    expect(validateTransition({ from: 'negociacao', to: 'descoberta', canReopen: false })).toEqual({ ok: true });
+    expect(validateTransition({ from: 'novo_lead', to: 'cobertura', canReopen: false })).toEqual({ ok: true });
+    expect(validateTransition({ from: 'fechamento', to: 'qualificacao', canReopen: false })).toEqual({ ok: true });
   });
   it('rejeita transição para a mesma etapa', () => {
-    expect(validateTransition({ from: 'novo', to: 'novo', canReopen: true })).toMatchObject({ ok: false, code: 'same_stage' });
+    expect(validateTransition({ from: 'novo_lead', to: 'novo_lead', canReopen: true })).toMatchObject({ ok: false, code: 'same_stage' });
   });
   it('perdida exige motivo e confirmação', () => {
-    expect(validateTransition({ from: 'oferta', to: 'perdida', canReopen: false, confirm: true })).toMatchObject({ code: 'loss_reason_required' });
-    expect(validateTransition({ from: 'oferta', to: 'perdida', canReopen: false, lossReason: 'preco' })).toMatchObject({ code: 'confirmation_required' });
-    expect(validateTransition({ from: 'oferta', to: 'perdida', canReopen: false, lossReason: 'preco', confirm: true })).toEqual({ ok: true });
+    expect(validateTransition({ from: 'proposta', to: 'perdida', canReopen: false, confirm: true })).toMatchObject({ code: 'loss_reason_required' });
+    expect(validateTransition({ from: 'proposta', to: 'perdida', canReopen: false, lossReason: 'preco' })).toMatchObject({ code: 'confirmation_required' });
+    expect(validateTransition({ from: 'proposta', to: 'perdida', canReopen: false, lossReason: 'preco', confirm: true })).toEqual({ ok: true });
   });
   it('ganha exige confirmação explícita', () => {
-    expect(validateTransition({ from: 'negociacao', to: 'ganha', canReopen: false })).toMatchObject({ code: 'confirmation_required' });
-    expect(validateTransition({ from: 'negociacao', to: 'ganha', canReopen: false, confirm: true })).toEqual({ ok: true });
+    expect(validateTransition({ from: 'fechamento', to: 'ganha', canReopen: false })).toMatchObject({ code: 'confirmation_required' });
+    expect(validateTransition({ from: 'fechamento', to: 'ganha', canReopen: false, confirm: true })).toEqual({ ok: true });
   });
   it('etapas terminais só reabrem com permissão e justificativa', () => {
-    expect(validateTransition({ from: 'ganha', to: 'negociacao', canReopen: false, reason: 'x' })).toMatchObject({ code: 'terminal' });
-    expect(validateTransition({ from: 'perdida', to: 'retorno', canReopen: true })).toMatchObject({ code: 'reason_required' });
-    expect(validateTransition({ from: 'perdida', to: 'retorno', canReopen: true, reason: 'Cliente voltou a ligar' })).toEqual({ ok: true });
+    expect(validateTransition({ from: 'ganha', to: 'fechamento', canReopen: false, reason: 'x' })).toMatchObject({ code: 'terminal' });
+    expect(validateTransition({ from: 'perdida', to: 'qualificacao', canReopen: true })).toMatchObject({ code: 'reason_required' });
+    expect(validateTransition({ from: 'perdida', to: 'qualificacao', canReopen: true, reason: 'Cliente voltou a ligar' })).toEqual({ ok: true });
   });
 });
 
@@ -77,12 +77,27 @@ describe('máscaras, dinheiro e CSV', () => {
   });
 });
 
-describe('papéis padrão', () => {
-  it('vendedor não lê finanças nem gerencia integração', () => {
-    expect(hasPermission(DEFAULT_ROLE_PERMISSIONS.vendedor, 'finance.read')).toBe(false);
-    expect(hasPermission(DEFAULT_ROLE_PERMISSIONS.vendedor, 'integration.manage')).toBe(false);
+describe('matriz de acesso padrão', () => {
+  it('vendedor: próprio nos módulos de trabalho, sem Configurações nem Inteligência', () => {
+    expect(DEFAULT_ACCESS.vendedor.oportunidades).toBe('proprio');
+    expect(DEFAULT_ACCESS.vendedor.relatorios).toBe('proprio');
+    expect(DEFAULT_ACCESS.vendedor.configuracoes).toBe('nenhum');
   });
-  it('analista não vê PII', () => {
-    expect(hasPermission(DEFAULT_ROLE_PERMISSIONS.analista, 'customer.pii.read')).toBe(false);
+  it('supervisão vê a equipe; gerência vê tudo e administra', () => {
+    expect(DEFAULT_ACCESS.supervisor.oportunidades).toBe('equipe');
+    expect(DEFAULT_ACCESS.supervisor.configuracoes).toBe('nenhum');
+    expect(DEFAULT_ACCESS.gerencia.configuracoes).toBe('total');
+    expect(Object.values(DEFAULT_ACCESS.gerencia).every((l) => l === 'total')).toBe(true);
+  });
+  it('níveis comparáveis e combinação pelo maior nível', () => {
+    expect(atLeast('equipe', 'proprio')).toBe(true);
+    expect(atLeast('proprio', 'equipe')).toBe(false);
+    expect(atLeast(undefined, 'proprio')).toBe(false);
+    expect(mergeLevels(['proprio', 'equipe', 'nenhum'])).toBe('equipe');
+    expect(mergeLevels([])).toBe('nenhum');
+  });
+  it('Configurações aceita só sem acesso ou total', () => {
+    expect(allowedLevels('configuracoes')).toEqual(['nenhum', 'total']);
+    expect(allowedLevels('leads')).toContain('proprio');
   });
 });

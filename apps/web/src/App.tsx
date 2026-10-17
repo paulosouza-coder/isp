@@ -1,19 +1,22 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import type { Module } from '@isp/domain';
 import { useAuth } from './auth/AuthProvider';
 import { AppShell } from './components/layout/AppShell';
-import { LoadingRows } from './components/ui/primitives';
+import { EmptyState, LoadingRows } from './components/ui/primitives';
 import { LoginPage } from './pages/Login';
-import { DashboardPage } from './pages/Dashboard';
+import { HomePage } from './pages/Home';
 import { LeadsPage } from './pages/Leads';
-import { PipelinePage } from './pages/Pipeline';
 import { OpportunitiesPage } from './pages/Opportunities';
 import { NewOpportunityPage, OpportunityWorkspacePage } from './pages/OpportunityWorkspace';
 import { CustomersPage } from './pages/Customers';
 import { CustomerDetailPage } from './pages/CustomerDetail';
 import { ActivitiesPage } from './pages/Activities';
-import { PhasePlaceholder } from './pages/PhasePlaceholder';
-import { SettingsPage } from './pages/Settings';
+import { ReportsPage } from './pages/Reports';
+import { IntelligencePage } from './pages/Intelligence';
+import { CampaignsPage } from './pages/Campaigns';
+import { AdminLayout, AdminOverview, AdminUsers, AdminPlans, AdminStages, AdminSources, AdminIntegrations, AdminNotifications, AdminSecurity, AdminBranding, AdminLogs } from './pages/admin/Admin';
+import { ProfilePage } from './pages/admin/Profile';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, loading } = useAuth();
@@ -23,27 +26,44 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** Rota protegida pelo nível do módulo; a API também recusa. */
+function Gate({ module, min, children }: { module: Module; min?: 'proprio' | 'equipe' | 'total'; children: ReactNode }) {
+  const { can } = useAuth();
+  if (!can(module, min)) return <div className="card"><EmptyState title="Sem acesso a este módulo" description="Seu perfil não tem acesso a esta área. Fale com a gerência se precisar." /></div>;
+  return <>{children}</>;
+}
+
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<RequireAuth><AppShell /></RequireAuth>}>
-        <Route index element={<DashboardPage />} />
-        <Route path="leads" element={<LeadsPage />} />
-        <Route path="pipeline" element={<PipelinePage />} />
-        <Route path="opportunities" element={<OpportunitiesPage />} />
-        <Route path="opportunities/new" element={<NewOpportunityPage />} />
-        <Route path="opportunities/:id" element={<OpportunityWorkspacePage />} />
-        <Route path="customers" element={<CustomersPage />} />
-        <Route path="customers/:id" element={<CustomerDetailPage />} />
-        <Route path="activities" element={<ActivitiesPage />} />
-        <Route path="campaigns" element={<PhasePlaceholder title="Campanhas e origens" phase={5} what="custos por campanha, atribuição versionada e conversão por origem" />} />
-        <Route path="intelligence" element={<PhasePlaceholder title="Inteligência (ICP)" phase={5} what="ICP de aquisição, de valor e prioritário, com tamanho de amostra e incerteza" />} />
-        <Route path="finance" element={<PhasePlaceholder title="Financeiro (LTV/CAC)" phase={5} what="CAC blended e por canal, LTV realizado e projetado, churn e payback por coorte" />} />
-        <Route path="reports" element={<PhasePlaceholder title="Relatórios" phase={5} what="funil, coortes, retenção e exportação sob permissão" />} />
-        <Route path="integrations" element={<PhasePlaceholder title="Integrações IXC" phase={4} what="saúde da sincronização, cursores, rejeições e matriz de endpoints verificados" />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<PhasePlaceholder title="Página não encontrada" what="" notFound />} />
+        <Route index element={<Gate module="inicio"><HomePage /></Gate>} />
+        <Route path="leads" element={<Gate module="leads"><LeadsPage /></Gate>} />
+        <Route path="opportunities" element={<Gate module="oportunidades"><OpportunitiesPage /></Gate>} />
+        <Route path="pipeline" element={<Navigate to="/opportunities" replace />} />
+        <Route path="opportunities/new" element={<Gate module="oportunidades"><NewOpportunityPage /></Gate>} />
+        <Route path="opportunities/:id" element={<Gate module="oportunidades"><OpportunityWorkspacePage /></Gate>} />
+        <Route path="customers" element={<Gate module="clientes"><CustomersPage /></Gate>} />
+        <Route path="customers/:id" element={<Gate module="clientes"><CustomerDetailPage /></Gate>} />
+        <Route path="activities" element={<Gate module="atividades"><ActivitiesPage /></Gate>} />
+        <Route path="reports" element={<Gate module="relatorios"><ReportsPage /></Gate>} />
+        <Route path="intelligence" element={<Gate module="inteligencia"><IntelligencePage /></Gate>} />
+        <Route path="campaigns" element={<Gate module="campanhas"><CampaignsPage /></Gate>} />
+        <Route path="settings/profile" element={<ProfilePage />} />
+        <Route path="settings" element={<Gate module="configuracoes" min="total"><AdminLayout /></Gate>}>
+          <Route index element={<AdminOverview />} />
+          <Route path="users" element={<AdminUsers />} />
+          <Route path="plans" element={<AdminPlans />} />
+          <Route path="stages" element={<AdminStages />} />
+          <Route path="sources" element={<AdminSources />} />
+          <Route path="integrations" element={<AdminIntegrations />} />
+          <Route path="notifications" element={<AdminNotifications />} />
+          <Route path="security" element={<AdminSecurity />} />
+          <Route path="branding" element={<AdminBranding />} />
+          <Route path="logs" element={<AdminLogs />} />
+        </Route>
+        <Route path="*" element={<div className="card"><EmptyState title="Esta página não existe" description="Confira o endereço ou volte para o início." /></div>} />
       </Route>
     </Routes>
   );

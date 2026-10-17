@@ -45,10 +45,10 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: {
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="modal-title" className={clsx('flex max-h-[92vh] w-full flex-col rounded-t-lg bg-raised shadow-overlay sm:rounded-lg', size === 'sm' ? 'sm:max-w-md' : size === 'lg' ? 'sm:max-w-3xl' : 'sm:max-w-xl')}>
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 id="modal-title" className="text-md font-semibold">{title}</h2>
-          <button onClick={onClose} className="rounded-sm p-1 text-muted hover:bg-sunken hover:text-ink" aria-label="Fechar"><X className="h-5 w-5" /></button>
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="modal-title" className={clsx('flex max-h-[92vh] w-full flex-col rounded-t-lg bg-surface shadow-overlay sm:rounded-lg', size === 'sm' ? 'sm:max-w-md' : size === 'lg' ? 'sm:max-w-3xl' : 'sm:max-w-xl')}>
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <h2 id="modal-title" className="text-lg font-bold text-ink">{title}</h2>
+          <button onClick={onClose} className="rounded-sm p-1 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Fechar"><X className="h-5 w-5" /></button>
         </div>
         <div className="overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
@@ -63,10 +63,10 @@ export function Drawer({ open, onClose, title, children, footer, width = 'md' }:
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex justify-end bg-ink/30" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="drawer-title" className={clsx('flex h-full w-full flex-col bg-raised shadow-overlay', width === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <h2 id="drawer-title" className="text-md font-semibold">{title}</h2>
-          <button onClick={onClose} className="rounded-sm p-1 text-muted hover:bg-sunken hover:text-ink" aria-label="Fechar"><X className="h-5 w-5" /></button>
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="drawer-title" className={clsx('flex h-full w-full flex-col bg-surface shadow-overlay', width === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <h2 id="drawer-title" className="text-lg font-bold text-ink">{title}</h2>
+          <button onClick={onClose} className="rounded-sm p-1 text-muted hover:bg-surface-2 hover:text-ink" aria-label="Fechar"><X className="h-5 w-5" /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
@@ -78,24 +78,12 @@ export function Drawer({ open, onClose, title, children, footer, width = 'md' }:
 
 export function ConfirmDialog({ open, title, children, confirmLabel, onConfirm, onCancel, tone = 'primary', loading, confirmDisabled }: { open: boolean; title: string; children: ReactNode; confirmLabel: string; onConfirm: () => void; onCancel: () => void; tone?: 'primary' | 'danger'; loading?: boolean; confirmDisabled?: boolean }) {
   return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title={title}
-      size="sm"
-      footer={
-        <>
-          <Button onClick={onCancel}>Cancelar</Button>
-          <Button variant={tone} onClick={onConfirm} loading={loading} disabled={confirmDisabled}>{confirmLabel}</Button>
-        </>
-      }
-    >
+    <Modal open={open} onClose={onCancel} title={title} size="sm" footer={<><Button onClick={onCancel}>Cancelar</Button><Button variant={tone} onClick={onConfirm} loading={loading} disabled={confirmDisabled}>{confirmLabel}</Button></>}>
       <div className="space-y-3 text-base">{children}</div>
     </Modal>
   );
 }
 
-// ------------------------------------------------------------------ Toast
 type ToastItem = { id: number; tone: 'success' | 'error'; message: string };
 const ToastCtx = createContext<(t: Omit<ToastItem, 'id'>) => void>(() => {});
 
@@ -111,7 +99,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div aria-live="polite" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(92vw,380px)] flex-col gap-2">
         {items.map((t) => (
-          <div key={t.id} role={t.tone === 'error' ? 'alert' : 'status'} className="pointer-events-auto flex items-start gap-2 rounded-md border border-line bg-raised px-3 py-2.5 shadow-overlay">
+          <div key={t.id} role={t.tone === 'error' ? 'alert' : 'status'} className="pointer-events-auto flex items-start gap-2 rounded-md border border-line bg-surface px-3 py-2.5 shadow-overlay">
             {t.tone === 'success' ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" aria-hidden />}
             <p className="flex-1 text-sm">{t.message}</p>
             <button className="text-muted hover:text-ink" aria-label="Dispensar" onClick={() => setItems((x) => x.filter((i) => i.id !== t.id))}><X className="h-4 w-4" /></button>

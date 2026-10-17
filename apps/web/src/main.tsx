@@ -4,14 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './auth/AuthProvider';
 import { ToastProvider } from './components/ui/overlay';
+import { BrandProvider } from './components/brand';
 import { ApiError } from './lib/api';
 import { App } from './App';
 import './styles/index.css';
-
-try {
-  const t = localStorage.getItem('theme');
-  if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
-} catch { /* armazenamento indisponível */ }
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,9 +25,11 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
+          <BrandProvider>
+            <ToastProvider>
+              <App />
+            </ToastProvider>
+          </BrandProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

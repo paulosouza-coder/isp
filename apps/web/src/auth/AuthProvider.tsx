@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Permission } from '@isp/domain';
+import { atLeast, type AccessLevel, type Module } from '@isp/domain';
 import { api, ApiError } from '../lib/api';
 import { setTimezone } from '../lib/format';
 import type { Me } from '../lib/types';
@@ -8,7 +8,9 @@ import type { Me } from '../lib/types';
 type AuthState = {
   me: Me | null;
   loading: boolean;
-  can: (p: Permission) => boolean;
+  /** Nível do usuário no módulo (matriz de segurança). */
+  level: (m: Module) => AccessLevel;
+  can: (m: Module, min?: AccessLevel) => boolean;
   refresh: () => Promise<unknown>;
   logout: () => Promise<void>;
 };
@@ -27,7 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw e;
       }
     },
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
     retry: false,
   });
 
@@ -42,11 +44,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [qc]);
 
   const me = q.data ?? null;
-  const perms = new Set(me?.permissions ?? []);
+  const level = (m: Module): AccessLevel => me?.access[m] ?? 'nenhum';
   const value: AuthState = {
     me,
     loading: q.isLoading,
-    can: (p) => perms.has(p),
+    level,
+    can: (m, min = 'proprio') => atLeast(level(m), min),
     refresh: () => q.refetch(),
     logout: async () => {
       try {
@@ -64,10 +67,4 @@ export function useAuth() {
   const v = useContext(Ctx);
   if (!v) throw new Error('useAuth fora do AuthProvider');
   return v;
-}
-
-/** Esconde UI sem permissão. A API revalida tudo — isto é só ergonomia. */
-export function PermissionGuard({ permission, children, fallback = null }: { permission: Permission; children: ReactNode; fallback?: ReactNode }) {
-  const { can } = useAuth();
-  return <>{can(permission) ? children : fallback}</>;
 }

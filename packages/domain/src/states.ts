@@ -1,19 +1,17 @@
 /** Estados separados (spec §6). Nunca inferir um a partir do outro. */
 
-export const OPPORTUNITY_STAGES = [
-  'novo', 'descoberta', 'qualificacao', 'oferta', 'negociacao', 'retorno', 'ganha', 'perdida',
-] as const;
+export const OPPORTUNITY_STAGES = ['novo_lead', 'qualificacao', 'cobertura', 'proposta', 'fechamento', 'ganha', 'perdida'] as const;
 export type OpportunityStage = (typeof OPPORTUNITY_STAGES)[number];
 
+/** Etapas do funil Yepnet. "Ganha" = venda fechada (ganho comercial); contrato confirmado é outro estado. */
 export const STAGE_LABELS: Record<OpportunityStage, string> = {
-  novo: 'Novo',
-  descoberta: 'Descoberta',
+  novo_lead: 'Novo lead',
   qualificacao: 'Qualificação',
-  oferta: 'Oferta',
-  negociacao: 'Negociação',
-  retorno: 'Retorno',
-  ganha: 'Ganha',
-  perdida: 'Perdida',
+  cobertura: 'Cobertura',
+  proposta: 'Proposta',
+  fechamento: 'Fechamento',
+  ganha: 'Venda fechada',
+  perdida: 'Perdido',
 };
 
 export const TERMINAL_STAGES: readonly OpportunityStage[] = ['ganha', 'perdida'];
@@ -37,10 +35,10 @@ export const COVERAGE_LABELS: Record<CoverageStatus, string> = {
   nao_consultada: 'Não consultada', pendente: 'Pendente', elegivel: 'Elegível', inelegivel: 'Inelegível', indeterminada: 'Indeterminada',
 };
 
-export const CUSTOMER_LIFECYCLES = ['prospect', 'ativo', 'suspenso', 'cancelado', 'reativado'] as const;
+export const CUSTOMER_LIFECYCLES = ['prospect', 'em_implantacao', 'ativo', 'inadimplente', 'suspenso', 'cancelado', 'reativado'] as const;
 export type CustomerLifecycle = (typeof CUSTOMER_LIFECYCLES)[number];
 export const LIFECYCLE_LABELS: Record<CustomerLifecycle, string> = {
-  prospect: 'Prospect', ativo: 'Ativo', suspenso: 'Suspenso', cancelado: 'Cancelado', reativado: 'Reativado',
+  prospect: 'Prospect', em_implantacao: 'Em implantação', ativo: 'Ativo', inadimplente: 'Inadimplente', suspenso: 'Suspenso', cancelado: 'Cancelado', reativado: 'Reativado',
 };
 
 export const LEAD_STATUSES = ['novo', 'em_contato', 'qualificado', 'convertido', 'descartado'] as const;
@@ -74,11 +72,20 @@ export const LOSS_REASON_LABELS: Record<LossReason, string> = {
   outro: 'Outro',
 };
 
-export const ACTIVITY_TYPES = ['tarefa', 'retorno', 'ligacao', 'reuniao', 'visita', 'email'] as const;
+export const ACTIVITY_TYPES = ['tarefa', 'ligacao', 'reuniao', 'email', 'whatsapp', 'visita'] as const;
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
-  tarefa: 'Tarefa', retorno: 'Retorno', ligacao: 'Ligação', reuniao: 'Reunião', visita: 'Visita técnica', email: 'E-mail',
+  tarefa: 'Tarefa', ligacao: 'Ligação', reuniao: 'Reunião', email: 'E-mail', whatsapp: 'WhatsApp', visita: 'Visita técnica',
 };
+/** Rótulo do selo na lista de atividades (design: WhatsApp aparece como "Mensagem"). */
+export const ACTIVITY_TAG_LABELS: Record<ActivityType, string> = {
+  tarefa: 'Tarefa', ligacao: 'Ligação', reuniao: 'Reunião', email: 'E-mail', whatsapp: 'Mensagem', visita: 'Visita',
+};
+
+export const SEGMENTS = ['residencial', 'empresarial', 'governamental', 'institucional'] as const;
+export type Segment = (typeof SEGMENTS)[number];
+export const SEGMENT_LABELS: Record<Segment, string> = { residencial: 'Residencial', empresarial: 'Empresarial', governamental: 'Governamental', institucional: 'Institucional' };
+export const SEGMENT_PRODUCT_LABELS: Record<Segment, string> = { residencial: 'Internet residencial', empresarial: 'Internet empresarial', governamental: 'Governamental', institucional: 'Institucional' };
 export const ACTIVITY_PRIORITIES = ['baixa', 'media', 'alta'] as const;
 export type ActivityPriority = (typeof ACTIVITY_PRIORITIES)[number];
 export const PRIORITY_LABELS: Record<ActivityPriority, string> = { baixa: 'Baixa', media: 'Média', alta: 'Alta' };

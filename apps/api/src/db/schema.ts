@@ -7,8 +7,10 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  pgTable, uuid, text, timestamp, boolean, integer, jsonb, primaryKey, uniqueIndex, index, check, bigint, serial,
+  pgTable, uuid, text, timestamp, boolean, integer, jsonb, primaryKey, uniqueIndex, index, check, bigint, serial, date, customType,
 } from 'drizzle-orm/pg-core';
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => 'bytea' });
 
 const id = () => uuid('id').primaryKey().defaultRandom();
 const tenantId = () => uuid('tenant_id').notNull().references(() => tenants.id, { onDelete: 'restrict' });
@@ -41,6 +43,12 @@ export const users = pgTable(
     lastLoginAt: ts('last_login_at'),
     failedLogins: integer('failed_logins').notNull().default(0),
     lockedUntil: ts('locked_until'),
+    /** Cargo exibido no topo (ex.: "Comercial"). */
+    jobTitle: text('job_title'),
+    /** Metas mensais usadas em "Meta do mês" e "Meu desempenho" no Início. */
+    goalSales: integer('goal_sales').notNull().default(0),
+    goalProposals: integer('goal_proposals').notNull().default(0),
+    goalLeads: integer('goal_leads').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -64,13 +72,65 @@ export const roles = pgTable(
   (t) => ({ uq: uniqueIndex('roles_tenant_key_uq').on(t.tenantId, t.key) }),
 );
 
-export const rolePermissions = pgTable(
-  'role_permissions',
+/** Matriz de segurança: nível de acesso de cada perfil em cada módulo. */
+export const accessPolicies = pgTable(
+  'access_policies',
   {
     roleId: uuid('role_id').notNull().references(() => roles.id, { onDelete: 'cascade' }),
-    permission: text('permission').notNull(),
+    module: text('module').notNull(),
+    level: text('level').notNull(),
+    updatedAt: updatedAt(),
+    updatedBy: uuid('updated_by'),
   },
-  (t) => ({ pk: primaryKey({ columns: [t.roleId, t.permission] }) }),
+  (t) => ({
+    pk: primaryKey({ columns: [t.roleId, t.module] }),
+    moduleCk: check('access_module_ck', inList('module', ['inicio', 'leads', 'oportunidades', 'clientes', 'atividades', 'relatorios', 'campanhas', 'inteligencia', 'configuracoes'])),
+    levelCk: check('access_level_ck', inList('level', ['nenhum', 'proprio', 'equipe', 'total'])),
+  }),
+);
+
+export const userAvatars = pgTable('user_avatars', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  mime: text('mime').notNull(),
+  data: bytea('data').notNull(),
+  updatedAt: updatedAt(),
+});
+
+/** Espaços de imagem da Personalização (logo, mascotes, banner…), por empresa. */
+export const brandAssets = pgTable(
+  'brand_assets',
+  {
+    tenantId: tenantId(),
+    slot: text('slot').notNull(),
+    mime: text('mime').notNull(),
+    data: bytea('data').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    updatedBy: uuid('updated_by').references(() => users.id),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.tenantId, t.slot] }) }),
+);
+
+/** Catálogo de planos. Nesta fase é mantido manualmente pela gerência; a autoridade futura é o IXC. */
+export const plans = pgTable(
+  'plans',
+  {
+    id: id(),
+    tenantId: tenantId(),
+    name: text('name').notNull(),
+    line: text('line'),
+    segment: text('segment').notNull().default('residencial'),
+    priceCents: integer('price_cents').notNull(),
+    active: boolean('active').notNull().default(true),
+    sourceSystem: text('source_system').notNull().default('catalogo_manual'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    uq: uniqueIndex('plans_tenant_name_uq').on(t.tenantId, t.name),
+    priceCk: check('plans_price_ck', sql`price_cents >= 0`),
+  }),
 );
 
 export const userRoles = pgTable(
@@ -161,6 +221,10 @@ export const contacts = pgTable(
     email: text('email'),
     createdBy: uuid('created_by').references(() => users.id),
     isProvisional: boolean('is_provisional').notNull().default(false),
+    /** Responsável pela carteira: define o que o vendedor (nível Próprio) enxerga em Clientes. */
+    ownerId: uuid('owner_id').references(() => users.id),
+    segment: text('segment').notNull().default('residencial'),
+    city: text('city'),
     sourceSystem: text('source_system').notNull().default('crm'),
     externalId: text('external_id'),
     createdAt: createdAt(),
@@ -169,6 +233,8 @@ export const contacts = pgTable(
     rowVersion: rowVersion(),
   },
   (t) => ({
+    segmentCk: check('contacts_segment_ck', inList('segment', ['residencial', 'empresarial', 'governamental', 'institucional'])),
+    ownerIdx: index('contacts_tenant_owner_idx').on(t.tenantId, t.ownerId),
     tenantIdx: index('contacts_tenant_name_idx').on(t.tenantId, t.name),
     extUq: uniqueIndex('contacts_ext_uq').on(t.tenantId, t.sourceSystem, t.externalId),
   }),
@@ -183,6 +249,9 @@ export const customers = pgTable(
     contactId: uuid('contact_id').notNull().references(() => contacts.id),
     displayName: text('display_name').notNull(),
     lifecycle: text('lifecycle').notNull().default('prospect'),
+    planId: uuid('plan_id').references(() => plans.id),
+    contractStart: date('contract_start', { mode: 'string' }),
+    nextDueOn: date('next_due_on', { mode: 'string' }),
     sourceSystem: text('source_system').notNull().default('crm'),
     externalId: text('external_id'),
     sourceUpdatedAt: ts('source_updated_at'),
@@ -192,7 +261,7 @@ export const customers = pgTable(
     rowVersion: rowVersion(),
   },
   (t) => ({
-    lifecycleCk: check('customers_lifecycle_ck', inList('lifecycle', ['prospect', 'ativo', 'suspenso', 'cancelado', 'reativado'])),
+    lifecycleCk: check('customers_lifecycle_ck', inList('lifecycle', ['prospect', 'em_implantacao', 'ativo', 'inadimplente', 'suspenso', 'cancelado', 'reativado'])),
     extUq: uniqueIndex('customers_ext_uq').on(t.tenantId, t.sourceSystem, t.externalId),
     contactIdx: index('customers_contact_idx').on(t.tenantId, t.contactId),
   }),
@@ -250,6 +319,9 @@ export const leads = pgTable(
     firstContactAt: ts('first_contact_at'),
     lastContactAt: ts('last_contact_at'),
     notes: text('notes'),
+    /** Canal do contato (metadado opcional) e descrição da última interação ("Formulário site"). */
+    channel: text('channel'),
+    lastInteractionNote: text('last_interaction_note'),
     convertedOpportunityId: uuid('converted_opportunity_id'),
     createdBy: uuid('created_by').references(() => users.id),
     createdAt: createdAt(),
@@ -293,7 +365,8 @@ export const opportunities = pgTable(
     ownerId: uuid('owner_id').notNull().references(() => users.id),
     teamId: uuid('team_id').references(() => teams.id),
     title: text('title').notNull(),
-    stage: text('stage').notNull().default('novo'),
+    stage: text('stage').notNull().default('novo_lead'),
+    planId: uuid('plan_id').references(() => plans.id),
     proposalStatus: text('proposal_status').notNull().default('nao_criada'),
     contractRequestStatus: text('contract_request_status').notNull().default('nao_solicitada'),
     coverageStatus: text('coverage_status').notNull().default('nao_consultada'),
@@ -319,7 +392,7 @@ export const opportunities = pgTable(
     rowVersion: rowVersion(),
   },
   (t) => ({
-    stageCk: check('opp_stage_ck', inList('stage', ['novo', 'descoberta', 'qualificacao', 'oferta', 'negociacao', 'retorno', 'ganha', 'perdida'])),
+    stageCk: check('opp_stage_ck', inList('stage', ['novo_lead', 'qualificacao', 'cobertura', 'proposta', 'fechamento', 'ganha', 'perdida'])),
     proposalCk: check('opp_proposal_ck', inList('proposal_status', ['nao_criada', 'rascunho', 'enviada', 'aceita', 'recusada', 'expirada'])),
     contractCk: check('opp_contract_ck', inList('contract_request_status', ['nao_solicitada', 'pendente', 'enviada', 'erro', 'confirmada', 'rejeitada'])),
     coverageCk: check('opp_coverage_ck', inList('coverage_status', ['nao_consultada', 'pendente', 'elegivel', 'inelegivel', 'indeterminada'])),
@@ -378,7 +451,7 @@ export const activities = pgTable(
     rowVersion: rowVersion(),
   },
   (t) => ({
-    typeCk: check('activities_type_ck', inList('type', ['tarefa', 'retorno', 'ligacao', 'reuniao', 'visita', 'email'])),
+    typeCk: check('activities_type_ck', inList('type', ['tarefa', 'ligacao', 'reuniao', 'email', 'whatsapp', 'visita'])),
     priorityCk: check('activities_priority_ck', inList('priority', ['baixa', 'media', 'alta'])),
     ownerDueIdx: index('activities_owner_due_idx').on(t.tenantId, t.ownerId, t.dueAt),
     oppIdx: index('activities_opp_idx').on(t.tenantId, t.opportunityId),

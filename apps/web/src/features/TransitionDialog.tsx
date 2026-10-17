@@ -6,7 +6,7 @@ import { FormField, Notice, Select, Textarea } from '../components/ui/primitives
 export type TransitionRequest = { from: OpportunityStage; to: OpportunityStage; title: string };
 export type TransitionPayload = { toStage: OpportunityStage; reason?: string | null; lossReason?: LossReason | null; confirm?: boolean };
 
-/** Transições que pedem confirmação: ganhar, perder e reabrir. As demais são diretas. */
+/** Transições que pedem confirmação: venda fechada, perda e reabertura. As demais são diretas. */
 export const needsDialog = (from: OpportunityStage, to: OpportunityStage) => isTerminal(to) || isTerminal(from);
 
 export function TransitionDialog({ request, onCancel, onConfirm, loading }: { request: TransitionRequest | null; onCancel: () => void; onConfirm: (p: TransitionPayload) => void; loading?: boolean }) {
@@ -16,21 +16,20 @@ export function TransitionDialog({ request, onCancel, onConfirm, loading }: { re
   if (!request) return null;
   const { from, to } = request;
   const reopening = isTerminal(from);
-  const title = reopening ? 'Reabrir oportunidade' : to === 'ganha' ? 'Marcar como ganha' : to === 'perdida' ? 'Marcar como perdida' : `Mover para ${STAGE_LABELS[to]}`;
-  const disabled = (to === 'perdida' && !loss) || (reopening && !reason.trim());
+  const title = reopening ? 'Reabrir oportunidade' : to === 'ganha' ? 'Marcar venda fechada' : to === 'perdida' ? 'Marcar como perdida' : `Mover para ${STAGE_LABELS[to]}`;
   return (
     <ConfirmDialog
       open
       title={title}
       tone={to === 'perdida' ? 'danger' : 'primary'}
-      confirmLabel={reopening ? 'Reabrir' : to === 'ganha' ? 'Marcar como ganha' : to === 'perdida' ? 'Marcar como perdida' : 'Mover'}
+      confirmLabel={reopening ? 'Reabrir' : to === 'ganha' ? 'Marcar venda fechada' : to === 'perdida' ? 'Marcar como perdida' : 'Mover'}
       loading={loading}
-      confirmDisabled={disabled}
+      confirmDisabled={(to === 'perdida' && !loss) || (reopening && !reason.trim())}
       onCancel={onCancel}
       onConfirm={() => onConfirm({ toStage: to, confirm: true, reason: reason.trim() || null, lossReason: to === 'perdida' ? (loss as LossReason) : null })}
     >
       <p><strong>{request.title}</strong>: {STAGE_LABELS[from]} → {STAGE_LABELS[to]}</p>
-      {to === 'ganha' && <Notice tone="warning">Ganho comercial não confirma contrato. O contrato só conta como confirmado após validação externa (IXC).</Notice>}
+      {to === 'ganha' && <Notice tone="warning">Venda fechada é ganho comercial. O contrato só conta como confirmado após validação no IXC.</Notice>}
       {to === 'perdida' && (
         <FormField label="Motivo da perda" htmlFor="td-loss" required>
           <Select id="td-loss" value={loss} onChange={(e) => setLoss(e.target.value as LossReason)} data-autofocus>

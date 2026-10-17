@@ -1,6 +1,6 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { and, eq, gt, isNull, inArray } from 'drizzle-orm';
-import type { Permission } from '@isp/domain';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { MODULES, mergeLevels, type AccessLevel, type Module } from '@isp/domain';
 import type { DB } from '../db/client';
 import type { Config } from '../config';
 import * as s from '../db/schema';
@@ -12,11 +12,16 @@ export type AuthContext = {
   tenantId: string;
   name: string;
   email: string;
+  jobTitle: string | null;
   timezone: string;
   tenantName: string;
-  roles: string[];
-  permissions: Set<string>;
+  profiles: string[];
+  /** Nível efetivo por módulo (maior nível entre os perfis do usuário). */
+  access: Record<Module, AccessLevel>;
+  /** Times dos quais o usuário participa. */
   teamIds: string[];
+  /** Usuários visíveis no nível "Equipe": membros dos times que ele LIDERA + ele mesmo. */
+  teamMemberIds: string[];
 };
 
 declare module 'fastify' {
@@ -38,13 +43,14 @@ export async function resolveSession(app: FastifyInstance, req: FastifyRequest):
   const unsigned = req.unsignCookie(raw);
   if (!unsigned.valid || !unsigned.value) return null;
   const now = new Date();
-  const rows = await app.db
+  const [row] = await app.db
     .select({
       sessionId: s.sessions.id,
       userId: s.users.id,
       tenantId: s.users.tenantId,
       name: s.users.name,
       email: s.users.email,
+      jobTitle: s.users.jobTitle,
       active: s.users.active,
       timezone: s.tenants.timezone,
       tenantName: s.tenants.name,
@@ -55,7 +61,6 @@ export async function resolveSession(app: FastifyInstance, req: FastifyRequest):
     .innerJoin(s.tenants, eq(s.tenants.id, s.users.tenantId))
     .where(and(eq(s.sessions.tokenHash, hashToken(unsigned.value)), isNull(s.sessions.revokedAt), gt(s.sessions.expiresAt, now)))
     .limit(1);
-  const row = rows[0];
   if (!row || !row.active) return null;
 
   const roleRows = await app.db
@@ -63,15 +68,19 @@ export async function resolveSession(app: FastifyInstance, req: FastifyRequest):
     .from(s.userRoles)
     .innerJoin(s.roles, eq(s.roles.id, s.userRoles.roleId))
     .where(and(eq(s.userRoles.userId, row.userId), eq(s.roles.tenantId, row.tenantId)));
-  const perms = roleRows.length
-    ? await app.db
-        .select({ permission: s.rolePermissions.permission })
-        .from(s.rolePermissions)
-        .where(inArray(s.rolePermissions.roleId, roleRows.map((r) => r.roleId)))
+  const policies = roleRows.length
+    ? await app.db.select().from(s.accessPolicies).where(inArray(s.accessPolicies.roleId, roleRows.map((r) => r.roleId)))
     : [];
-  const teams = await app.db.select({ teamId: s.teamMemberships.teamId }).from(s.teamMemberships).where(eq(s.teamMemberships.userId, row.userId));
+  const access = Object.fromEntries(
+    MODULES.map((m) => [m, mergeLevels(policies.filter((p) => p.module === m).map((p) => p.level as AccessLevel))]),
+  ) as Record<Module, AccessLevel>;
 
-  // atualiza last_seen no máximo 1x por minuto
+  const memberships = await app.db.select().from(s.teamMemberships).where(eq(s.teamMemberships.userId, row.userId));
+  const ledTeams = memberships.filter((m) => m.isLead).map((m) => m.teamId);
+  const members = ledTeams.length
+    ? await app.db.select({ userId: s.teamMemberships.userId }).from(s.teamMemberships).where(inArray(s.teamMemberships.teamId, ledTeams))
+    : [];
+
   if (now.getTime() - row.lastSeenAt.getTime() > 60_000) {
     await app.db.update(s.sessions).set({ lastSeenAt: now }).where(eq(s.sessions.id, row.sessionId));
   }
@@ -82,16 +91,12 @@ export async function resolveSession(app: FastifyInstance, req: FastifyRequest):
     tenantId: row.tenantId,
     name: row.name,
     email: row.email,
+    jobTitle: row.jobTitle,
     timezone: row.timezone,
     tenantName: row.tenantName,
-    roles: roleRows.map((r) => r.key),
-    permissions: new Set(perms.map((p) => p.permission)),
-    teamIds: teams.map((t) => t.teamId),
+    profiles: roleRows.map((r) => r.key),
+    access,
+    teamIds: memberships.map((m) => m.teamId),
+    teamMemberIds: [...new Set([row.userId, ...members.map((m) => m.userId)])],
   };
 }
-
-export function can(auth: AuthContext, p: Permission) {
-  return auth.permissions.has(p);
-}
-
-export type Reply = FastifyReply;

@@ -15,6 +15,20 @@
       "when": 1792275130129,
       "tag": "0001_append_only_guards",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792277884259,
+      "tag": "0002_yepnet_design",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792277885601,
+      "tag": "0003_drop_role_permissions",
+      "breakpoints": true
     }
   ]
 }

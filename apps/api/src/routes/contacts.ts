@@ -1,87 +1,104 @@
 import { and, desc, eq, ilike, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { ContactCreate, CustomerListQuery } from '@isp/shared';
-import { maskEmail, maskPhone } from '@isp/domain';
 import { defineRoute, IdParams } from '../http/route';
 import { notFound } from '../http/errors';
 import type { AuthContext } from '../http/context';
 import * as s from '../db/schema';
 import { audit } from '../services/audit';
+import { assertAssignableUser, ownerScope } from '../services/scope';
 import { opportunityDto, opportunityQuery, oppVisibility } from '../services/opportunities';
+import { ratio } from '../services/metrics';
 
 const like = (q: string) => `%${q.replace(/[%_\\]/g, '\\$&')}%`;
-
-function contactPii<T extends { phone: string | null; email: string | null }>(auth: AuthContext, c: T) {
-  const pii = auth.permissions.has('customer.pii.read');
-  return { ...c, phone: pii ? c.phone : maskPhone(c.phone), email: pii ? c.email : maskEmail(c.email), piiMasked: !pii };
-}
-
-/** Oportunidades visíveis ao usuário para um contato (respeita escopo próprio × equipe). */
-const visibleOppCount = (auth: AuthContext) =>
-  auth.permissions.has('opportunity.read_all')
-    ? sql<number>`(select count(*)::int from opportunities o where o.contact_id = ${s.contacts.id} and o.tenant_id = ${auth.tenantId} and o.deleted_at is null)`
-    : sql<number>`(select count(*)::int from opportunities o where o.contact_id = ${s.contacts.id} and o.tenant_id = ${auth.tenantId} and o.deleted_at is null and o.owner_id = ${auth.userId})`;
+const owner = alias(s.users, 'cust_owner');
+/** Carteira de clientes: o nível do módulo Clientes filtra pelo responsável do contato. */
+const scope = (auth: AuthContext) => ownerScope(auth, 'clientes', { tenantId: s.contacts.tenantId, ownerId: s.contacts.ownerId, deletedAt: s.contacts.deletedAt });
 
 export const contactRoutes = [
   defineRoute({
     method: 'GET',
     url: '/contacts',
-    summary: 'Busca de contatos (combobox da nova oportunidade)',
+    summary: 'Busca de contatos da carteira (combobox da nova oportunidade)',
     tag: 'Clientes',
-    permission: 'customer.read',
+    module: 'clientes',
     query: z.object({ q: z.string().trim().min(2).max(100) }),
     handler: async ({ app, auth, query }) => {
       const rows = await app.db
-        .select({
-          id: s.contacts.id,
-          name: s.contacts.name,
-          phone: s.contacts.phone,
-          email: s.contacts.email,
-          customerId: s.customers.id,
-          lifecycle: s.customers.lifecycle,
-          externalId: s.customers.externalId,
-        })
+        .select({ id: s.contacts.id, name: s.contacts.name, phone: s.contacts.phone, email: s.contacts.email, segment: s.contacts.segment, customerId: s.customers.id, lifecycle: s.customers.lifecycle, externalId: s.customers.externalId })
         .from(s.contacts)
         .leftJoin(s.customers, eq(s.customers.contactId, s.contacts.id))
-        .where(
-          and(
-            eq(s.contacts.tenantId, auth.tenantId),
-            isNull(s.contacts.deletedAt),
-            or(ilike(s.contacts.name, like(query.q)), ilike(s.contacts.phone, like(query.q)), ilike(s.contacts.email, like(query.q)), eq(s.customers.externalId, query.q)),
-          ),
-        )
+        .where(and(scope(auth), or(ilike(s.contacts.name, like(query.q)), ilike(s.contacts.phone, like(query.q)), ilike(s.contacts.email, like(query.q)), eq(s.customers.externalId, query.q))))
         .orderBy(sql`${s.customers.id} is null`, s.contacts.name)
         .limit(10);
-      return { items: rows.map((r) => contactPii(auth, r)) };
+      return { items: rows };
     },
   }),
 
   defineRoute({
     method: 'POST',
     url: '/contacts',
-    summary: 'Cria contato',
+    summary: 'Cadastra cliente/contato na carteira (prospect até haver contrato no IXC)',
     tag: 'Clientes',
-    permission: 'customer.create',
+    module: 'clientes',
     body: ContactCreate,
-    handler: async ({ app, auth, body, reply }) => {
-      const [c] = await app.db.insert(s.contacts).values({ tenantId: auth.tenantId, ...body, createdBy: auth.userId }).returning();
+    handler: async ({ app, auth, body, reply, req }) => {
+      const ownerId = body.ownerId ?? auth.userId;
+      await assertAssignableUser(app.db, auth, 'clientes', ownerId);
+      const [c] = await app.db
+        .insert(s.contacts)
+        .values({ tenantId: auth.tenantId, name: body.name, phone: body.phone, email: body.email, segment: body.segment, city: body.city, ownerId, createdBy: auth.userId })
+        .returning();
+      await audit(app.db, req, { action: 'contact.create', entityType: 'contact', entityId: c!.id });
       reply.code(201);
-      return contactPii(auth, { id: c!.id, name: c!.name, phone: c!.phone, email: c!.email });
+      return { id: c!.id, name: c!.name, phone: c!.phone, email: c!.email, segment: c!.segment };
+    },
+  }),
+
+  defineRoute({
+    method: 'GET',
+    url: '/customers/summary',
+    summary: 'Indicadores da carteira de clientes',
+    tag: 'Clientes',
+    module: 'clientes',
+    handler: async ({ app, auth }) => {
+      const [r] = (
+        await app.db.execute<{ ativos: number; cancelados: number; implantacao: number; vencer: number }>(sql`
+          select count(*) filter (where cu.lifecycle in ('ativo','reativado'))::int ativos,
+                 count(*) filter (where cu.lifecycle = 'cancelado')::int cancelados,
+                 count(*) filter (where cu.lifecycle = 'em_implantacao')::int implantacao,
+                 count(*) filter (where cu.lifecycle in ('ativo','reativado','inadimplente') and cu.next_due_on between current_date and current_date + 30)::int vencer
+          from ${s.contacts} join ${s.customers} cu on cu.contact_id = ${s.contacts.id}
+          where ${scope(auth)}`)
+      ).rows;
+      const noHistory = 'Sem histórico para comparar: a evolução da base chega com a sincronização do IXC.';
+      return {
+        kpis: [
+          { key: 'ativos', label: 'Clientes ativos', value: r!.ativos, delta: null, unit: 'count', formula: `Clientes com situação Ativo ou Reativado. ${noHistory}` },
+          { key: 'retencao', label: 'Taxa de retenção', value: ratio(r!.ativos, r!.ativos + r!.cancelados), delta: null, unit: 'ratio', formula: `Ativos ÷ (ativos + cancelados) da carteira (n=${r!.ativos + r!.cancelados}). ${noHistory}` },
+          { key: 'implantacao', label: 'Em implantação', value: r!.implantacao, delta: null, unit: 'count', formula: `Clientes com situação Em implantação. ${noHistory}` },
+          { key: 'vencer', label: 'Com contratos a vencer', value: r!.vencer, delta: null, unit: 'count', formula: `Contratos com próximo vencimento nos próximos 30 dias. ${noHistory}` },
+        ],
+      };
     },
   }),
 
   defineRoute({
     method: 'GET',
     url: '/customers',
-    summary: 'Lista pessoas/clientes com ciclo de vida e oportunidades',
+    summary: 'Lista clientes e contatos da carteira com plano, situação e contrato',
     tag: 'Clientes',
-    permission: 'customer.read',
+    module: 'clientes',
     query: CustomerListQuery,
     handler: async ({ app, auth, query }) => {
-      const where: SQL[] = [eq(s.contacts.tenantId, auth.tenantId), isNull(s.contacts.deletedAt)];
+      const where: SQL[] = [scope(auth)];
       if (query.q) where.push(or(ilike(s.contacts.name, like(query.q)), ilike(s.contacts.phone, like(query.q)), eq(s.customers.externalId, query.q))!);
       if (query.lifecycle === 'prospect') where.push(isNull(s.customers.id));
       else if (query.lifecycle) where.push(eq(s.customers.lifecycle, query.lifecycle));
+      if (query.segment) where.push(eq(s.contacts.segment, query.segment));
+      if (query.planId) where.push(eq(s.customers.planId, query.planId));
+      if (query.ownerId) where.push(eq(s.contacts.ownerId, query.ownerId));
       const cond = and(...where);
       const [rows, [{ total } = { total: 0 }]] = await Promise.all([
         app.db
@@ -90,33 +107,42 @@ export const contactRoutes = [
             name: s.contacts.name,
             phone: s.contacts.phone,
             email: s.contacts.email,
+            segment: s.contacts.segment,
+            city: s.contacts.city,
             isProvisional: s.contacts.isProvisional,
             createdAt: s.contacts.createdAt,
             customerId: s.customers.id,
             lifecycle: s.customers.lifecycle,
             externalId: s.customers.externalId,
             sourceSystem: s.customers.sourceSystem,
-            ingestedAt: s.customers.ingestedAt,
-            opportunities: visibleOppCount(auth),
+            contractStart: s.customers.contractStart,
+            nextDueOn: s.customers.nextDueOn,
+            planName: s.plans.name,
+            planLine: s.plans.line,
+            ownerId: s.contacts.ownerId,
+            ownerName: owner.name,
+            ownerHasAvatar: sql<boolean>`exists(select 1 from user_avatars ua where ua.user_id = "contacts"."owner_id")`,
           })
           .from(s.contacts)
           .leftJoin(s.customers, eq(s.customers.contactId, s.contacts.id))
+          .leftJoin(s.plans, eq(s.plans.id, s.customers.planId))
+          .leftJoin(owner, eq(owner.id, s.contacts.ownerId))
           .where(cond)
-          .orderBy(sql`${s.customers.id} is null`, s.contacts.name)
+          .orderBy(sql`${s.customers.id} is null`, sql`${s.customers.contractStart} asc nulls last`, s.contacts.name)
           .limit(query.pageSize)
           .offset((query.page - 1) * query.pageSize),
         app.db.select({ total: sql<number>`count(*)::int` }).from(s.contacts).leftJoin(s.customers, eq(s.customers.contactId, s.contacts.id)).where(cond),
       ]);
-      return { items: rows.map((r) => ({ ...contactPii(auth, r), lifecycle: r.lifecycle ?? 'prospect' })), page: query.page, pageSize: query.pageSize, total };
+      return { items: rows.map((r) => ({ ...r, lifecycle: r.lifecycle ?? 'prospect' })), page: query.page, pageSize: query.pageSize, total };
     },
   }),
 
   defineRoute({
     method: 'GET',
     url: '/contacts/:id',
-    summary: 'Ficha do contato/cliente: identidade, IDs externos, oportunidades e atividades',
+    summary: 'Ficha do cliente: identidade, plano, contrato, oportunidades e interações',
     tag: 'Clientes',
-    permission: 'customer.read',
+    module: 'clientes',
     params: IdParams,
     handler: async ({ app, auth, params, req }) => {
       const [c] = await app.db
@@ -125,20 +151,31 @@ export const contactRoutes = [
           name: s.contacts.name,
           phone: s.contacts.phone,
           email: s.contacts.email,
+          segment: s.contacts.segment,
+          city: s.contacts.city,
           isProvisional: s.contacts.isProvisional,
           createdAt: s.contacts.createdAt,
+          ownerId: s.contacts.ownerId,
+          ownerName: owner.name,
           customerId: s.customers.id,
           lifecycle: s.customers.lifecycle,
           sourceSystem: s.customers.sourceSystem,
           externalId: s.customers.externalId,
+          contractStart: s.customers.contractStart,
+          nextDueOn: s.customers.nextDueOn,
+          planName: s.plans.name,
+          planLine: s.plans.line,
+          planPriceCents: s.plans.priceCents,
           sourceUpdatedAt: s.customers.sourceUpdatedAt,
           ingestedAt: s.customers.ingestedAt,
         })
         .from(s.contacts)
         .leftJoin(s.customers, eq(s.customers.contactId, s.contacts.id))
-        .where(and(eq(s.contacts.id, params.id), eq(s.contacts.tenantId, auth.tenantId), isNull(s.contacts.deletedAt)))
+        .leftJoin(s.plans, eq(s.plans.id, s.customers.planId))
+        .leftJoin(owner, eq(owner.id, s.contacts.ownerId))
+        .where(and(eq(s.contacts.id, params.id), scope(auth)))
         .limit(1);
-      if (!c) throw notFound('Contato não encontrado.');
+      if (!c) throw notFound('Cliente não encontrado.');
       const externalIds = c.customerId
         ? await app.db.select({ system: s.customerExternalIds.system, externalId: s.customerExternalIds.externalId }).from(s.customerExternalIds).where(and(eq(s.customerExternalIds.customerId, c.customerId), eq(s.customerExternalIds.tenantId, auth.tenantId)))
         : [];
@@ -149,16 +186,14 @@ export const contactRoutes = [
         .where(and(eq(s.addresses.tenantId, auth.tenantId), or(eq(s.addresses.contactId, params.id), c.customerId ? eq(s.addresses.customerId, c.customerId) : undefined)))
         .orderBy(desc(s.addresses.validFrom));
       const staleHours = c.ingestedAt ? (Date.now() - c.ingestedAt.getTime()) / 3_600_000 : null;
-      if (auth.permissions.has('customer.pii.read')) {
-        await audit(app.db, req, { action: 'customer.pii_view', entityType: 'contact', entityId: params.id });
-      }
+      await audit(app.db, req, { action: 'customer.view', entityType: 'contact', entityId: params.id });
       return {
-        ...contactPii(auth, c),
+        ...c,
         lifecycle: c.lifecycle ?? 'prospect',
         externalIds,
-        addresses: auth.permissions.has('customer.pii.read') ? addresses : addresses.map((a) => ({ ...a, street: a.street ? '••••' : null, number: null, complement: null })),
+        addresses,
         freshness: c.ingestedAt ? { ingestedAt: c.ingestedAt, stale: (staleHours ?? 0) > 24, staleHours } : null,
-        opportunities: opps.map((o) => opportunityDto(o, auth)),
+        opportunities: opps.map((o) => opportunityDto(o)),
       };
     },
   }),

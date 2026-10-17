@@ -1,12 +1,14 @@
 /**
- * Registro declarativo de rotas: cada rota declara permissão, schemas Zod e resumo.
- * O helper aplica autenticação, RBAC (negação por padrão), validação 422 e alimenta o OpenAPI.
+ * Registro declarativo de rotas: cada rota declara o MÓDULO e o nível mínimo exigido.
+ * O helper aplica autenticação, a matriz de segurança (negação por padrão), validação 422
+ * e alimenta o OpenAPI. O escopo de registros (próprio/equipe/total) é aplicado nas consultas.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z, type ZodTypeAny } from 'zod';
-import type { Permission } from '@isp/domain';
-import { forbidden, unauthorized, unprocessable, zodToProblemErrors } from './errors';
+import type { AccessLevel, Module } from '@isp/domain';
+import { unauthorized, unprocessable, zodToProblemErrors } from './errors';
 import type { AuthContext } from './context';
+import { requireLevel } from '../services/scope';
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
@@ -17,13 +19,15 @@ export type RouteDef<B extends ZodTypeAny = ZodTypeAny, Q extends ZodTypeAny = Z
   tag: string;
   /** Rota pública (sem sessão). Use com parcimônia. */
   public?: boolean;
-  /** Exige TODAS as permissões listadas. Rotas autenticadas sem permissão explícita são negadas. */
-  permission?: Permission | Permission[];
+  /** Módulo da matriz de segurança e nível mínimo (padrão: Próprio). */
+  module?: Module;
+  min?: AccessLevel;
   /** Usuário autenticado basta (ex.: /me, logout). Precisa ser declarado explicitamente. */
   anyAuthenticated?: boolean;
   body?: B;
   query?: Q;
   params?: P;
+  bodyLimit?: number;
   /** Limite específico da rota, calculado a partir da configuração (ex.: login). */
   rateLimit?: (c: FastifyInstance['config']) => { max: number; timeWindow: string };
   handler: (ctx: {
@@ -56,22 +60,21 @@ export const IdParams = z.object({ id: z.string().uuid('ID inválido') });
 
 export function registerRoutes(app: FastifyInstance, prefix: string, defs: RouteDef<any, any, any>[]) {
   for (const def of defs) {
-    if (!def.public && !def.permission && !def.anyAuthenticated) {
+    if (!def.public && !def.module && !def.anyAuthenticated) {
       throw new Error(`Rota ${def.method} ${def.url} sem política de acesso declarada`);
     }
     routeRegistry.push({ ...def, url: prefix + def.url });
     app.route({
       method: def.method,
       url: prefix + def.url,
+      bodyLimit: def.bodyLimit,
       config: def.rateLimit ? { rateLimit: def.rateLimit(app.config) } : undefined,
       handler: async (req, reply) => {
-        let auth = req.auth;
+        const auth = req.auth;
         if (!def.public) {
           if (!auth) throw unauthorized();
-          const required = def.permission ? (Array.isArray(def.permission) ? def.permission : [def.permission]) : [];
-          for (const p of required) if (!auth.permissions.has(p)) throw forbidden();
+          if (def.module) requireLevel(auth, def.module, def.min ?? 'proprio');
         }
-        // params primeiro: ID inválido é 404-like (422), nunca vaza erro de banco
         const params = parse(def.params, req.params, 'URL');
         const query = parse(def.query, req.query, 'consulta');
         const body = parse(def.body, req.body, 'corpo');

@@ -10,14 +10,20 @@ import { audit } from '../services/audit';
 const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
 
-function meDto(auth: NonNullable<Awaited<ReturnType<typeof resolveSession>>>) {
+export function meDto(auth: NonNullable<Awaited<ReturnType<typeof resolveSession>>>, hasAvatar = false) {
   return {
-    user: { id: auth.userId, name: auth.name, email: auth.email },
+    user: { id: auth.userId, name: auth.name, email: auth.email, jobTitle: auth.jobTitle, hasAvatar },
     tenant: { id: auth.tenantId, name: auth.tenantName, timezone: auth.timezone },
-    roles: auth.roles,
-    permissions: [...auth.permissions].sort(),
+    profiles: auth.profiles,
+    access: auth.access,
     teamIds: auth.teamIds,
+    teamMemberIds: auth.teamMemberIds,
   };
+}
+
+async function hasAvatar(app: Parameters<typeof resolveSession>[0], userId: string) {
+  const r = await app.db.select({ u: s.userAvatars.userId }).from(s.userAvatars).where(eq(s.userAvatars.userId, userId)).limit(1);
+  return r.length > 0;
 }
 
 export const authRoutes = [
@@ -76,7 +82,7 @@ export const authRoutes = [
       });
       req.cookies[SESSION_COOKIE] = reply.signCookie(token);
       const ctx = await resolveSession(app, req);
-      return meDto(ctx!);
+      return meDto(ctx!, await hasAvatar(app, user.id));
     },
   }),
 
@@ -100,6 +106,6 @@ export const authRoutes = [
     summary: 'Usuário, empresa, papéis e permissões da sessão',
     tag: 'Auth',
     anyAuthenticated: true,
-    handler: async ({ auth }) => meDto(auth),
+    handler: async ({ app, auth }) => meDto(auth, await hasAvatar(app, auth.userId)),
   }),
 ];

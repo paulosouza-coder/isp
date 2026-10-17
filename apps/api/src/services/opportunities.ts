@@ -1,13 +1,13 @@
 import type { FastifyRequest } from 'fastify';
 import { and, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import { maskEmail, maskPhone, type OpportunityReason } from '@isp/domain';
+import type { OpportunityReason } from '@isp/domain';
 import type { ContactCreate } from '@isp/shared';
 import type { DbOrTx } from '../db/client';
 import * as s from '../db/schema';
 import type { AuthContext } from '../http/context';
-import { notFound } from '../http/errors';
-import { assertAssignableUser, assertTenantRefs, visibility } from './scope';
+import { notFound, unprocessable } from '../http/errors';
+import { assertAssignableUser, assertTenantRefs, ownerScope } from './scope';
 import { audit } from './audit';
 
 export type CreateOpportunityInput = {
@@ -17,20 +17,30 @@ export type CreateOpportunityInput = {
   ownerId?: string | null;
   sourceId?: string | null;
   campaignId?: string | null;
+  planId?: string | null;
   channel: string | null;
   reasons: OpportunityReason[];
   title: string | null;
-  valueCents?: number | null;
 };
+
+/** Preço vem do catálogo (nunca digitado): sem plano, sem valor. */
+export async function planPrice(db: DbOrTx, auth: AuthContext, planId: string | null | undefined) {
+  if (!planId) return null;
+  const [p] = await db.select().from(s.plans).where(and(eq(s.plans.id, planId), eq(s.plans.tenantId, auth.tenantId))).limit(1);
+  if (!p) throw unprocessable('Plano inválido.', [{ path: 'planId', message: 'Plano não encontrado no catálogo' }]);
+  if (!p.active) throw unprocessable('Plano inativo no catálogo.', [{ path: 'planId', message: 'Escolha um plano ativo' }]);
+  return p;
+}
 
 /**
  * Cria a oportunidade e a persiste imediatamente (spec §4): ID, owner, origem, timestamps, versão
- * e evento "created". Contato novo é provisório, com dados mínimos.
+ * e evento "created". Contato novo é provisório e entra na carteira do responsável.
  */
 export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: FastifyRequest, input: CreateOpportunityInput) {
   const ownerId = input.ownerId ?? auth.userId;
-  await assertAssignableUser(tx, auth, ownerId, 'opportunity.assign');
-  await assertTenantRefs(tx, auth, { sourceId: input.sourceId, campaignId: input.campaignId, contactId: input.contactId });
+  await assertAssignableUser(tx, auth, 'oportunidades', ownerId);
+  await assertTenantRefs(tx, auth, { sourceId: input.sourceId, campaignId: input.campaignId });
+  const plan = await planPrice(tx, auth, input.planId);
 
   let contactId = input.contactId ?? null;
   let contactName: string;
@@ -38,13 +48,29 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
     if (!input.newContact) throw notFound('Contato não encontrado.');
     const [c] = await tx
       .insert(s.contacts)
-      .values({ tenantId: auth.tenantId, name: input.newContact.name, phone: input.newContact.phone, email: input.newContact.email, isProvisional: true, createdBy: auth.userId })
+      .values({
+        tenantId: auth.tenantId,
+        name: input.newContact.name,
+        phone: input.newContact.phone,
+        email: input.newContact.email,
+        segment: input.newContact.segment,
+        city: input.newContact.city,
+        ownerId,
+        isProvisional: true,
+        createdBy: auth.userId,
+      })
       .returning({ id: s.contacts.id, name: s.contacts.name });
     contactId = c!.id;
     contactName = c!.name;
   } else {
-    const [c] = await tx.select({ name: s.contacts.name }).from(s.contacts).where(and(eq(s.contacts.id, contactId), eq(s.contacts.tenantId, auth.tenantId))).limit(1);
-    contactName = c!.name;
+    // contato existente precisa estar visível na carteira do usuário (Clientes)
+    const [c] = await tx
+      .select({ name: s.contacts.name })
+      .from(s.contacts)
+      .where(and(eq(s.contacts.id, contactId), ownerScope(auth, 'clientes', { tenantId: s.contacts.tenantId, ownerId: s.contacts.ownerId, deletedAt: s.contacts.deletedAt })))
+      .limit(1);
+    if (!c) throw unprocessable('Referência inválida.', [{ path: 'contactId', message: 'Contato fora da sua carteira' }]);
+    contactName = c.name;
   }
 
   if (input.leadId) {
@@ -52,12 +78,7 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
     if (!l) throw notFound('Lead não encontrado.');
   }
 
-  const [customer] = await tx
-    .select({ id: s.customers.id })
-    .from(s.customers)
-    .where(and(eq(s.customers.contactId, contactId), eq(s.customers.tenantId, auth.tenantId)))
-    .limit(1);
-
+  const [customer] = await tx.select({ id: s.customers.id }).from(s.customers).where(and(eq(s.customers.contactId, contactId), eq(s.customers.tenantId, auth.tenantId))).limit(1);
   const [team] = await tx.select({ teamId: s.teamMemberships.teamId }).from(s.teamMemberships).where(eq(s.teamMemberships.userId, ownerId)).limit(1);
   const now = new Date();
   const [opp] = await tx
@@ -69,12 +90,13 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
       leadId: input.leadId ?? null,
       ownerId,
       teamId: team?.teamId ?? null,
-      title: input.title ?? `${contactName} — nova oportunidade`,
+      title: input.title ?? (plan ? `${plan.name} — ${contactName}` : `${contactName} — nova oportunidade`),
       reasons: input.reasons,
       channel: input.channel,
       sourceId: input.sourceId ?? null,
       campaignId: input.campaignId ?? null,
-      valueCents: input.valueCents ?? null,
+      planId: plan?.id ?? null,
+      valueCents: plan?.priceCents ?? null,
       sprintStartedAt: now,
       createdBy: auth.userId,
     })
@@ -84,9 +106,9 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
     opportunityId: opp!.id,
     type: 'created',
     actorId: auth.userId,
-    toValue: 'novo',
+    toValue: 'novo_lead',
     rowVersion: 1,
-    payload: { reasons: input.reasons, channel: input.channel, fromLead: input.leadId ?? null, provisionalContact: !input.contactId },
+    payload: { reasons: input.reasons, channel: input.channel, fromLead: input.leadId ?? null, provisionalContact: !input.contactId, planId: plan?.id ?? null },
   });
   await audit(tx, req, { action: 'opportunity.create', entityType: 'opportunity', entityId: opp!.id });
   return opp!;
@@ -105,6 +127,9 @@ export const opportunitySelect = {
   reasons: s.opportunities.reasons,
   channel: s.opportunities.channel,
   valueCents: s.opportunities.valueCents,
+  planId: s.opportunities.planId,
+  planName: s.plans.name,
+  planLine: s.plans.line,
   nextAction: s.opportunities.nextAction,
   nextActionAt: s.opportunities.nextActionAt,
   notes: s.opportunities.notes,
@@ -124,9 +149,12 @@ export const opportunitySelect = {
   contactName: s.contacts.name,
   contactPhone: s.contacts.phone,
   contactEmail: s.contacts.email,
+  contactSegment: s.contacts.segment,
+  contactCity: s.contacts.city,
   contactProvisional: s.contacts.isProvisional,
   ownerId: s.opportunities.ownerId,
   ownerName: owner.name,
+  ownerHasAvatar: sql<boolean>`exists(select 1 from user_avatars ua where ua.user_id = "opportunities"."owner_id")`,
   sourceId: s.opportunities.sourceId,
   sourceName: s.leadSources.name,
   campaignId: s.opportunities.campaignId,
@@ -140,12 +168,13 @@ export function opportunityQuery(db: DbOrTx) {
     .innerJoin(s.contacts, eq(s.contacts.id, s.opportunities.contactId))
     .innerJoin(owner, eq(owner.id, s.opportunities.ownerId))
     .leftJoin(s.customers, eq(s.customers.id, s.opportunities.customerId))
+    .leftJoin(s.plans, eq(s.plans.id, s.opportunities.planId))
     .leftJoin(s.leadSources, eq(s.leadSources.id, s.opportunities.sourceId))
     .leftJoin(s.campaigns, eq(s.campaigns.id, s.opportunities.campaignId));
 }
 
 export function oppVisibility(auth: AuthContext) {
-  return visibility(auth, { tenantId: s.opportunities.tenantId, ownerId: s.opportunities.ownerId, deletedAt: s.opportunities.deletedAt }, 'opportunity.read_all');
+  return ownerScope(auth, 'oportunidades', { tenantId: s.opportunities.tenantId, ownerId: s.opportunities.ownerId, deletedAt: s.opportunities.deletedAt });
 }
 
 export async function loadOpportunity(db: DbOrTx, auth: AuthContext, id: string) {
@@ -156,14 +185,10 @@ export async function loadOpportunity(db: DbOrTx, auth: AuthContext, id: string)
 
 export type OpportunityRow = Awaited<ReturnType<typeof loadOpportunity>>;
 
-export function opportunityDto(r: OpportunityRow, auth: AuthContext, now = new Date()) {
-  const pii = auth.permissions.has('customer.pii.read');
+export function opportunityDto(r: OpportunityRow, now = new Date()) {
   const open = r.stage !== 'ganha' && r.stage !== 'perdida';
   return {
     ...r,
-    contactPhone: pii ? r.contactPhone : maskPhone(r.contactPhone),
-    contactEmail: pii ? r.contactEmail : maskEmail(r.contactEmail),
-    piiMasked: !pii,
     ageDays: Math.floor((now.getTime() - r.createdAt.getTime()) / 86_400_000),
     daysInStage: Math.floor((now.getTime() - r.stageChangedAt.getTime()) / 86_400_000),
     overdue: open && !!r.nextActionAt && r.nextActionAt < now,

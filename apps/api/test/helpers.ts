@@ -19,7 +19,9 @@ export type Client = {
   get: (url: string) => Promise<LightMyRequestResponse>;
   post: (url: string, body?: unknown) => Promise<LightMyRequestResponse>;
   patch: (url: string, body?: unknown) => Promise<LightMyRequestResponse>;
-  me: { user: { id: string; name: string }; tenant: { id: string }; permissions: string[] };
+  put: (url: string, body?: unknown) => Promise<LightMyRequestResponse>;
+  del: (url: string) => Promise<LightMyRequestResponse>;
+  me: { user: { id: string; name: string }; tenant: { id: string }; profiles: string[]; access: Record<string, string> };
 };
 
 export async function login(app: FastifyInstance, email: string, password = PASSWORD): Promise<Client> {
@@ -27,7 +29,7 @@ export async function login(app: FastifyInstance, email: string, password = PASS
   if (res.statusCode !== 200) throw new Error(`login ${email} falhou: ${res.statusCode} ${res.body}`);
   const setCookie = res.headers['set-cookie'];
   const cookie = (Array.isArray(setCookie) ? setCookie[0] : setCookie)!.split(';')[0]!;
-  const send = (method: 'GET' | 'POST' | 'PATCH') => (url: string, body?: unknown) =>
+  const send = (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE') => (url: string, body?: unknown) =>
     app.inject({ method, url: `/api/v1${url}`, headers: { cookie, origin: ORIGIN }, ...(body !== undefined ? { payload: body as object } : {}) });
-  return { cookie, get: send('GET'), post: send('POST'), patch: send('PATCH'), me: res.json() };
+  return { cookie, get: send('GET'), post: send('POST'), patch: send('PATCH'), put: send('PUT'), del: (url: string) => send('DELETE')(url), me: res.json() };
 }

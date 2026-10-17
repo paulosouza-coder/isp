@@ -3,105 +3,114 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Activity, BarChart3, Bell, Cable, ChevronsLeft, ChevronsRight, CircleDollarSign, Contact, Filter, Gauge, KanbanSquare, LogOut, Megaphone, Menu,
-  Moon, Plus, Settings, Sun, Target, Users, X,
+  BarChart3, Bell, CalendarCheck, ChevronDown, CircleHelp, ClipboardList, Home, Lightbulb, LogOut, Menu, Send, Settings, UserRound, Users, UsersRound, X,
 } from 'lucide-react';
-import type { Permission } from '@isp/domain';
-import { ROLE_LABELS, type RoleKey } from '@isp/domain';
+import type { Module } from '@isp/domain';
 import { useAuth } from '../../auth/AuthProvider';
 import { api } from '../../lib/api';
 import { useHotkey } from '../../lib/hooks';
-import { Button } from '../ui/primitives';
+import { Avatar } from '../ui/primitives';
+import { Modal } from '../ui/overlay';
+import { BrandImage, Logo } from '../brand';
 import { GlobalSearch } from './GlobalSearch';
 
-type NavItem = { to: string; label: string; icon: ReactNode; permission: Permission; phase?: number };
+type NavItem = { to: string; label: string; icon: ReactNode; module: Module; badge?: boolean };
+const ICON = 'h-[22px] w-[22px] shrink-0';
 const NAV: NavItem[] = [
-  { to: '/', label: 'Visão geral', icon: <Gauge className="h-4 w-4" />, permission: 'dashboard.read' },
-  { to: '/leads', label: 'Leads', icon: <Filter className="h-4 w-4" />, permission: 'lead.read' },
-  { to: '/pipeline', label: 'Pipeline', icon: <KanbanSquare className="h-4 w-4" />, permission: 'opportunity.read' },
-  { to: '/opportunities', label: 'Oportunidades', icon: <Target className="h-4 w-4" />, permission: 'opportunity.read' },
-  { to: '/customers', label: 'Clientes', icon: <Contact className="h-4 w-4" />, permission: 'customer.read' },
-  { to: '/activities', label: 'Atividades', icon: <Activity className="h-4 w-4" />, permission: 'activity.read' },
-  { to: '/campaigns', label: 'Campanhas e origens', icon: <Megaphone className="h-4 w-4" />, permission: 'campaign.read', phase: 5 },
-  { to: '/intelligence', label: 'Inteligência (ICP)', icon: <Users className="h-4 w-4" />, permission: 'analytics.read', phase: 5 },
-  { to: '/finance', label: 'Financeiro (LTV/CAC)', icon: <CircleDollarSign className="h-4 w-4" />, permission: 'finance.read', phase: 5 },
-  { to: '/reports', label: 'Relatórios', icon: <BarChart3 className="h-4 w-4" />, permission: 'analytics.read', phase: 5 },
-  { to: '/integrations', label: 'Integrações IXC', icon: <Cable className="h-4 w-4" />, permission: 'integration.read', phase: 4 },
-  { to: '/settings', label: 'Configurações', icon: <Settings className="h-4 w-4" />, permission: 'settings.read' },
+  { to: '/', label: 'Início', icon: <Home className={ICON} />, module: 'inicio' },
+  { to: '/leads', label: 'Leads', icon: <UsersRound className={ICON} />, module: 'leads' },
+  { to: '/opportunities', label: 'Oportunidades', icon: <ClipboardList className={ICON} />, module: 'oportunidades' },
+  { to: '/customers', label: 'Clientes', icon: <Users className={ICON} />, module: 'clientes' },
+  { to: '/activities', label: 'Atividades', icon: <CalendarCheck className={ICON} />, module: 'atividades', badge: true },
+  { to: '/reports', label: 'Relatórios', icon: <BarChart3 className={ICON} />, module: 'relatorios' },
+  { to: '/campaigns', label: 'Campanhas', icon: <Send className={ICON} />, module: 'campanhas' },
+  { to: '/intelligence', label: 'Inteligência', icon: <Lightbulb className={ICON} />, module: 'inteligencia' },
+  { to: '/settings', label: 'Configurações', icon: <Settings className={ICON} />, module: 'configuracoes' },
 ];
 
-function readCollapsed() {
-  try { return localStorage.getItem('sidebar:collapsed') === '1'; } catch { return false; }
+export const SETTINGS_NAV = [
+  { to: '/settings/profile', label: 'Meu perfil', admin: false },
+  { to: '/settings', label: 'Administração', admin: true },
+  { to: '/settings/users', label: 'Usuários', admin: true },
+  { to: '/settings/plans', label: 'Planos e produtos', admin: true },
+  { to: '/settings/stages', label: 'Etapas de vendas', admin: true },
+  { to: '/settings/sources', label: 'Origem de leads', admin: true },
+  { to: '/settings/integrations', label: 'Integrações', admin: true },
+  { to: '/settings/notifications', label: 'Notificações', admin: true },
+  { to: '/settings/security', label: 'Segurança', admin: true },
+  { to: '/settings/branding', label: 'Personalização', admin: true },
+  { to: '/settings/logs', label: 'Logs do sistema', admin: true },
+];
+
+function useOpenActivities() {
+  const { can } = useAuth();
+  return useQuery({
+    queryKey: ['activities', 'counts'],
+    enabled: can('atividades'),
+    queryFn: () => api<{ counts: { overdue: number; today: number; open: number } }>('/activities?status=hoje&pageSize=1'),
+    refetchInterval: 60_000,
+  });
 }
 
-function Sidebar({ collapsed, onToggle, onNavigate }: { collapsed: boolean; onToggle?: () => void; onNavigate?: () => void }) {
+function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { can } = useAuth();
+  const loc = useLocation();
+  const counts = useOpenActivities().data?.counts;
+  const badge = counts ? counts.today + counts.overdue : 0;
+  const inSettings = loc.pathname.startsWith('/settings');
   return (
-    <div className="flex h-full flex-col bg-sidebar text-sidebar-text">
-      <div className={clsx('flex h-14 items-center gap-2 px-4', collapsed && 'justify-center px-0')}>
-        <SprintMark />
-        {!collapsed && <span className="text-md font-semibold text-sidebar-active">ISP Sprint</span>}
-      </div>
-      <nav aria-label="Navegação principal" className="flex-1 overflow-y-auto px-2 py-2">
-        <ul className="space-y-0.5">
-          {NAV.filter((n) => can(n.permission)).map((n) => (
+    <div className="flex h-full flex-col bg-gradient-to-b from-navy to-navy-2 text-white">
+      <Link to="/" onClick={onNavigate} className="flex h-[84px] items-center px-7" aria-label="Início">
+        <Logo />
+      </Link>
+      <nav aria-label="Navegação principal" className="scroll-thin flex-1 overflow-y-auto px-3 pb-3">
+        <ul className="space-y-1">
+          {NAV.filter((n) => can(n.module) || (n.module === 'configuracoes' && inSettings)).map((n) => (
             <li key={n.to}>
               <NavLink
                 to={n.to}
                 end={n.to === '/'}
                 onClick={onNavigate}
-                title={collapsed ? n.label : undefined}
                 className={({ isActive }) =>
                   clsx(
-                    'flex items-center gap-2.5 rounded-sm px-2.5 py-2 text-sm transition-colors',
-                    collapsed && 'justify-center',
-                    isActive ? 'bg-white/10 font-medium text-sidebar-active' : 'hover:bg-white/5 hover:text-sidebar-active',
+                    'relative flex h-12 items-center gap-3.5 rounded-md px-4 text-md transition-colors',
+                    isActive || (n.to === '/settings' && inSettings) ? 'bg-navy-active font-semibold text-lime before:absolute before:inset-y-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-lime' : 'text-white/95 hover:bg-white/5',
                   )
                 }
               >
                 {n.icon}
-                {!collapsed && <span className="flex-1 truncate">{n.label}</span>}
-                {!collapsed && n.phase && <span className="text-[11px] text-sidebar-text/70">Fase {n.phase}</span>}
+                <span className="flex-1 truncate">{n.label}</span>
+                {n.badge && badge > 0 && <span className="num rounded-full bg-[#5DBB2F] px-2.5 py-0.5 text-xs font-bold text-white">{badge}</span>}
               </NavLink>
+              {n.to === '/settings' && inSettings && (
+                <ul className="mb-2 mt-1 space-y-0.5 pl-9">
+                  {SETTINGS_NAV.filter((s) => !s.admin || can('configuracoes', 'total')).map((s) => (
+                    <li key={s.to}>
+                      <NavLink
+                        to={s.to}
+                        end
+                        onClick={onNavigate}
+                        className={({ isActive }) => clsx('block rounded-sm px-3 py-1.5 text-sm', isActive ? 'border-l-2 border-lime bg-navy-active font-semibold text-lime' : 'text-white/85 hover:bg-white/5')}
+                      >
+                        {s.label}
+                      </NavLink>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
           ))}
         </ul>
       </nav>
-      {onToggle && (
-        <button onClick={onToggle} className="m-2 flex items-center justify-center gap-2 rounded-sm px-2 py-2 text-sm hover:bg-white/5" aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}>
-          {collapsed ? <ChevronsRight className="h-4 w-4" /> : <><ChevronsLeft className="h-4 w-4" /> Recolher</>}
-        </button>
-      )}
+      <div className={clsx('relative mx-4 mb-4 overflow-hidden rounded-[18px] bg-gradient-to-br from-[#0E3A9A] via-[#0B2A72] to-[#05174A]', inSettings ? 'h-[170px] shrink-0 [@media(max-height:960px)]:hidden' : 'h-[300px] min-h-[200px] shrink-0 [@media(max-height:640px)]:hidden')} aria-hidden>
+        <BrandImage slot="card_sidebar" className="absolute inset-0 h-full w-full object-cover object-bottom" />
+        <p className="relative px-5 pt-5 text-[30px] font-extrabold leading-[1.05] text-white drop-shadow">
+          Confiar
+          <br />
+          ficou <span className="text-lime">fácil.</span>
+        </p>
+      </div>
     </div>
-  );
-}
-
-/** Marca: sete barras de sinal = sete minutos do Sprint. */
-export function SprintMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 28 20" className={clsx('h-5 w-7', className)} aria-hidden>
-      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
-        <rect key={i} x={i * 4} y={18 - (i + 1) * 2.5} width="2.6" height={(i + 1) * 2.5} rx="0.8" fill="rgb(var(--primary))" opacity={0.45 + i * 0.09} />
-      ))}
-    </svg>
-  );
-}
-
-function ThemeToggle() {
-  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark');
-  return (
-    <button
-      className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-sunken"
-      onClick={() => {
-        const next = !dark;
-        setDark(next);
-        document.documentElement.dataset.theme = next ? 'dark' : 'light';
-        try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch { /* ignora */ }
-      }}
-    >
-      {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-      {dark ? 'Tema claro' : 'Tema escuro'}
-    </button>
   );
 }
 
@@ -109,22 +118,33 @@ function UserMenu() {
   const { me, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
   if (!me) return null;
-  const initials = me.user.name.split(' ').map((p) => p[0]).slice(0, 2).join('');
   return (
-    <div className="relative">
-      <button aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold text-primary" aria-label={`Conta de ${me.user.name}`}>
-        {initials}
+    <div className="relative" ref={ref}>
+      <button aria-label={`Conta de ${me.user.name}`} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} className="flex items-center gap-3 rounded-md px-2 py-1 hover:bg-surface-2">
+        <Avatar name={me.user.name} userId={me.user.id} hasPhoto={me.user.hasAvatar} size={44} />
+        <span className="hidden text-left leading-tight md:block">
+          <span className="block text-md font-bold text-ink">{me.user.name}</span>
+          <span className="block text-sm text-muted">{me.user.jobTitle ?? ''}</span>
+        </span>
+        <ChevronDown className="h-5 w-5 text-ink" aria-hidden />
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 z-30 mt-2 w-64 rounded-md border border-line bg-raised p-1 shadow-overlay" onMouseLeave={() => setOpen(false)}>
+        <div role="menu" className="absolute right-0 z-30 mt-2 w-64 rounded-md border border-line bg-surface p-1 shadow-overlay">
           <div className="border-b border-line px-3 py-2">
-            <p className="font-medium">{me.user.name}</p>
+            <p className="font-semibold text-ink">{me.user.name}</p>
             <p className="text-sm text-muted">{me.tenant.name}</p>
-            <p className="mt-1 text-xs text-muted">{me.roles.map((r) => ROLE_LABELS[r as RoleKey] ?? r).join(', ')}</p>
           </div>
-          <ThemeToggle />
-          <button role="menuitem" className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-sunken" onClick={async () => { await logout(); nav('/login'); }}>
+          <button role="menuitem" className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-surface-2" onClick={() => { setOpen(false); nav('/settings/profile'); }}>
+            <UserRound className="h-4 w-4" /> Meu perfil
+          </button>
+          <button role="menuitem" className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-surface-2" onClick={async () => { await logout(); nav('/login'); }}>
             <LogOut className="h-4 w-4" /> Sair
           </button>
         </div>
@@ -133,70 +153,63 @@ function UserMenu() {
   );
 }
 
-function OverdueBell() {
-  const { can } = useAuth();
-  const { data } = useQuery({
-    queryKey: ['activities', 'counts'],
-    enabled: can('activity.read'),
-    queryFn: () => api<{ counts: { overdue: number; today: number } }>('/activities?status=atrasadas&pageSize=1'),
-    refetchInterval: 60_000,
-  });
-  const n = data?.counts.overdue ?? 0;
+function HelpButton() {
+  const [open, setOpen] = useState(false);
   return (
-    <Link to="/activities?status=atrasadas" className="relative flex h-9 w-9 items-center justify-center rounded-sm text-muted hover:bg-sunken hover:text-ink" aria-label={n ? `${n} atividades vencidas` : 'Nenhuma atividade vencida'}>
-      <Bell className="h-5 w-5" />
-      {n > 0 && <span className="num absolute -right-0.5 -top-0.5 min-w-[18px] rounded-full bg-danger px-1 text-center text-[11px] font-semibold leading-[18px] text-inverse">{n > 99 ? '99+' : n}</span>}
-    </Link>
+    <>
+      <button onClick={() => setOpen(true)} className="flex h-11 w-11 items-center justify-center rounded-full text-ink hover:bg-surface-2" aria-label="Ajuda">
+        <CircleHelp className="h-7 w-7" strokeWidth={1.6} />
+      </button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Ajuda" size="sm">
+        <ul className="space-y-2 text-sm">
+          <li><kbd className="rounded border border-line bg-surface-2 px-1.5">/</kbd> busca global</li>
+          <li><kbd className="rounded border border-line bg-surface-2 px-1.5">N</kbd> nova oportunidade (fora de campos de texto)</li>
+          <li>O que você vê em cada módulo depende do nível do seu perfil (Próprio, Equipe ou Total), definido pela gerência em Configurações → Segurança.</li>
+        </ul>
+      </Modal>
+    </>
   );
 }
 
 export function AppShell() {
   const { can } = useAuth();
-  const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const search = useRef<{ focus: () => void }>(null);
   const nav = useNavigate();
   const loc = useLocation();
-  const newOpp = useCallback(() => can('opportunity.create') && nav('/opportunities/new'), [can, nav]);
+  const counts = useOpenActivities().data?.counts;
+  const newOpp = useCallback(() => can('oportunidades') && nav('/opportunities/new'), [can, nav]);
   useHotkey('/', useCallback(() => search.current?.focus(), []));
   useHotkey('n', newOpp);
   useEffect(() => setMobileOpen(false), [loc.pathname]);
+  const notify = (counts?.overdue ?? 0) + (counts?.today ?? 0);
 
   return (
     <div className="flex min-h-screen">
-      <a href="#conteudo" className="sr-only z-50 rounded bg-primary px-3 py-2 text-inverse focus:not-sr-only focus:fixed focus:left-2 focus:top-2">Pular para o conteúdo</a>
-      <aside className={clsx('sticky top-0 hidden h-screen shrink-0 lg:block', collapsed ? 'w-16' : 'w-60')}>
-        <Sidebar
-          collapsed={collapsed}
-          onToggle={() => {
-            setCollapsed((v) => {
-              try { localStorage.setItem('sidebar:collapsed', v ? '0' : '1'); } catch { /* ignora */ }
-              return !v;
-            });
-          }}
-        />
+      <a href="#conteudo" className="sr-only z-50 rounded bg-primary px-3 py-2 text-white focus:not-sr-only focus:fixed focus:left-2 focus:top-2">Pular para o conteúdo</a>
+      <aside className="hidden w-[228px] shrink-0 bg-navy lg:block">
+        <div className="sticky top-0 h-screen"><Sidebar /></div>
       </aside>
       {mobileOpen && (
         <div className="fixed inset-0 z-40 flex lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
-          <div className="w-64"><Sidebar collapsed={false} onNavigate={() => setMobileOpen(false)} /></div>
-          <button className="flex-1 bg-ink/40" aria-label="Fechar menu" onClick={() => setMobileOpen(false)}><X className="ml-2 mt-3 h-6 w-6 text-inverse" /></button>
+          <div className="w-[260px]"><Sidebar onNavigate={() => setMobileOpen(false)} /></div>
+          <button className="flex-1 bg-ink/40" aria-label="Fechar menu" onClick={() => setMobileOpen(false)}><X className="ml-2 mt-3 h-6 w-6 text-white" /></button>
         </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line bg-surface/95 px-4 backdrop-blur">
-          <button className="rounded-sm p-1.5 text-muted hover:bg-sunken lg:hidden" aria-label="Abrir menu" onClick={() => setMobileOpen(true)}><Menu className="h-5 w-5" /></button>
+        <header className="sticky top-0 z-20 flex h-[72px] items-center gap-3 border-b border-line/60 bg-surface/95 px-4 backdrop-blur sm:px-6">
+          <button className="rounded-sm p-1.5 text-ink hover:bg-surface-2 lg:hidden" aria-label="Abrir menu" onClick={() => setMobileOpen(true)}><Menu className="h-6 w-6" /></button>
           <GlobalSearch ref={search} />
-          <div className="ml-auto flex items-center gap-1.5">
-            {can('opportunity.create') && (
-              <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={newOpp} title="Atalho: N" className="max-sm:px-2.5">
-                <span className="max-sm:sr-only">Nova oportunidade</span>
-              </Button>
-            )}
-            <OverdueBell />
+          <div className="ml-auto flex items-center gap-2 sm:gap-4">
+            <Link to="/activities" className="relative flex h-11 w-11 items-center justify-center rounded-full text-ink hover:bg-surface-2" aria-label={notify ? `${notify} atividades para hoje ou vencidas` : 'Sem atividades pendentes hoje'}>
+              <Bell className="h-7 w-7" strokeWidth={1.6} />
+              {notify > 0 && <span className="absolute right-2 top-1.5 h-3.5 w-3.5 rounded-full border-2 border-surface bg-[#5DBB2F]" aria-hidden />}
+            </Link>
+            <HelpButton />
             <UserMenu />
           </div>
         </header>
-        <main id="conteudo" className="flex-1 px-4 py-5 sm:px-6">
+        <main id="conteudo" className="flex-1 px-4 py-6 sm:px-6">
           <Outlet />
         </main>
       </div>
