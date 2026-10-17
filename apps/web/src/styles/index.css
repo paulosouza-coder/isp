@@ -1,0 +1,29 @@
+@import './tokens.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { font-size: 16px; }
+  body {
+    @apply bg-bg text-ink font-sans text-base antialiased;
+    font-feature-settings: 'tnum' 0;
+  }
+  /* foco sempre visível para teclado */
+  :focus-visible { outline: 2px solid rgb(var(--focus)); outline-offset: 2px; }
+  .num { font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+@layer components {
+  .field-input {
+    @apply w-full rounded-sm border border-line bg-surface px-3 py-2 text-base text-ink placeholder:text-muted/70
+      hover:border-line-strong disabled:cursor-not-allowed disabled:bg-sunken disabled:text-muted;
+  }
+  .field-input[aria-invalid='true'] { @apply border-danger; }
+  .panel { @apply rounded-lg border border-line bg-surface; }
+  .link { @apply text-primary underline-offset-2 hover:underline; }
+  .skeleton { @apply animate-pulse rounded-sm bg-sunken; }
+}

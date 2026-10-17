@@ -138,7 +138,7 @@ export const contactRoutes = [
         .leftJoin(s.customers, eq(s.customers.contactId, s.contacts.id))
         .where(and(eq(s.contacts.id, params.id), eq(s.contacts.tenantId, auth.tenantId), isNull(s.contacts.deletedAt)))
         .limit(1);
-      if (!c) throw notFound('Contato');
+      if (!c) throw notFound('Contato não encontrado.');
       const externalIds = c.customerId
         ? await app.db.select({ system: s.customerExternalIds.system, externalId: s.customerExternalIds.externalId }).from(s.customerExternalIds).where(and(eq(s.customerExternalIds.customerId, c.customerId), eq(s.customerExternalIds.tenantId, auth.tenantId)))
         : [];

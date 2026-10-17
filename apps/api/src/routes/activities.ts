@@ -46,7 +46,7 @@ const vis = (auth: AuthContext) =>
 
 async function load(db: DbOrTx, auth: AuthContext, id: string) {
   const [row] = await query(db).where(and(eq(s.activities.id, id), vis(auth))).limit(1);
-  if (!row) throw notFound('Atividade');
+  if (!row) throw notFound('Atividade não encontrada.');
   return row;
 }
 
@@ -115,7 +115,7 @@ export const activityRoutes = [
         }
         if (body.leadId) {
           const [l] = await tx.select({ contactId: s.leads.contactId }).from(s.leads).where(and(eq(s.leads.id, body.leadId), eq(s.leads.tenantId, auth.tenantId))).limit(1);
-          if (!l) throw notFound('Lead');
+          if (!l) throw notFound('Lead não encontrado.');
           contactId = contactId ?? l.contactId;
         }
         const dueAt = body.dueAt ? new Date(body.dueAt) : null;

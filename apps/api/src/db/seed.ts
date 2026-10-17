@@ -105,7 +105,7 @@ export async function seedTenant(db: DB, opts: { name: string; slug: string; use
       ownerId: r() > 0.15 ? anySeller() : null,
       interests: Array.from(new Set([pick(INTERESTS), ...(r() > 0.5 ? [pick(INTERESTS)] : [])])),
       nextAction: status === 'descartado' ? null : pick(NEXT_ACTIONS),
-      nextActionAt: status === 'descartado' ? null : r() > 0.5 ? daysAhead(Math.floor(r() * 5)) : daysAgo(Math.floor(r() * 3)),
+      nextActionAt: status === 'descartado' ? null : r() > 0.5 ? daysAhead(Math.floor(r() * 5)) : new Date(Math.max(created.getTime() + 3_600_000, daysAgo(Math.floor(r() * 3)).getTime())),
       firstContactAt: first,
       lastContactAt: first ? new Date(Math.min(now, first.getTime() + r() * 6 * 86_400_000)) : null,
       createdAt: created,
@@ -143,7 +143,7 @@ export async function seedTenant(db: DB, opts: { name: string; slug: string; use
         // nenhuma oportunidade da seed tem contrato confirmado: isso exige confirmação externa (Fase 6)
         contractRequestStatus: stage === 'ganha' ? 'pendente' : 'nao_solicitada',
         nextAction: terminal ? null : pick(NEXT_ACTIONS),
-        nextActionAt: terminal ? null : r() > 0.35 ? daysAhead(Math.floor(r() * 6), Math.floor(r() * 8)) : daysAgo(Math.floor(r() * 4) + 1),
+        nextActionAt: terminal ? null : r() > 0.35 ? daysAhead(Math.floor(r() * 6), Math.floor(r() * 8)) : new Date(Math.max(created.getTime() + 3_600_000, daysAgo(Math.floor(r() * 4) + 1).getTime())),
         lossReason: stage === 'perdida' ? pick(['preco', 'sem_cobertura', 'satisfeito_atual', 'sem_resposta']) : null,
         wonAt: stage === 'ganha' ? changed : null,
         lostAt: stage === 'perdida' ? changed : null,

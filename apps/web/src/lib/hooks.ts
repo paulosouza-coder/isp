@@ -1,0 +1,62 @@
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api } from './api';
+import type { Lookups } from './types';
+
+export function useLookups() {
+  return useQuery({ queryKey: ['lookups'], queryFn: () => api<Lookups>('/meta/lookups'), staleTime: 10 * 60_000 });
+}
+
+/**
+ * Estado de filtros na URL: sobrevive a refresh, voltar/avançar e compartilhamento de link.
+ * Também é o mecanismo de "vista salva" mais simples: o link é a vista.
+ */
+export function useUrlState<T extends Record<string, string>>(defaults: T) {
+  const [params, setParams] = useSearchParams();
+  const state = Object.fromEntries(Object.entries(defaults).map(([k, v]) => [k, params.get(k) ?? v])) as T;
+  const set = useCallback(
+    (patch: Partial<T>, opts: { resetPage?: boolean } = { resetPage: true }) => {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          for (const [k, v] of Object.entries(patch)) {
+            if (v === undefined || v === '' || v === (defaults as Record<string, string>)[k]) next.delete(k);
+            else next.set(k, String(v));
+          }
+          if (opts.resetPage && !('page' in patch)) next.delete('page');
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setParams, defaults],
+  );
+  return [state, set] as const;
+}
+
+export function useDebounced<T>(value: T, ms = 300) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+/** Atalho de teclado global que ignora quando o foco está em campos de texto. */
+export function useHotkey(key: string, handler: () => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement;
+      if (t.closest('input,textarea,select,[contenteditable="true"],[role="dialog"]')) return;
+      if (e.key.toLowerCase() === key.toLowerCase()) {
+        e.preventDefault();
+        handler();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [key, handler]);
+}

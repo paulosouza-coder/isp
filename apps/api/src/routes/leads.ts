@@ -67,7 +67,7 @@ async function loadLead(db: DbOrTx, auth: AuthContext, id: string) {
   const [row] = await baseQuery(db)
     .where(and(eq(s.leads.id, id), visibility(auth, { tenantId: s.leads.tenantId, ownerId: s.leads.ownerId, deletedAt: s.leads.deletedAt }, 'lead.read_all')))
     .limit(1);
-  if (!row) throw notFound('Lead');
+  if (!row) throw notFound('Lead não encontrado.');
   return row;
 }
 

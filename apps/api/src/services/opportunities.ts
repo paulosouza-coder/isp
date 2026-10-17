@@ -35,7 +35,7 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
   let contactId = input.contactId ?? null;
   let contactName: string;
   if (!contactId) {
-    if (!input.newContact) throw notFound('Contato');
+    if (!input.newContact) throw notFound('Contato não encontrado.');
     const [c] = await tx
       .insert(s.contacts)
       .values({ tenantId: auth.tenantId, name: input.newContact.name, phone: input.newContact.phone, email: input.newContact.email, isProvisional: true, createdBy: auth.userId })
@@ -49,7 +49,7 @@ export async function createOpportunity(tx: DbOrTx, auth: AuthContext, req: Fast
 
   if (input.leadId) {
     const [l] = await tx.select({ id: s.leads.id }).from(s.leads).where(and(eq(s.leads.id, input.leadId), eq(s.leads.tenantId, auth.tenantId))).limit(1);
-    if (!l) throw notFound('Lead');
+    if (!l) throw notFound('Lead não encontrado.');
   }
 
   const [customer] = await tx
@@ -150,7 +150,7 @@ export function oppVisibility(auth: AuthContext) {
 
 export async function loadOpportunity(db: DbOrTx, auth: AuthContext, id: string) {
   const [row] = await opportunityQuery(db).where(and(eq(s.opportunities.id, id), oppVisibility(auth))).limit(1);
-  if (!row) throw notFound('Oportunidade');
+  if (!row) throw notFound('Oportunidade não encontrada.');
   return row;
 }
 

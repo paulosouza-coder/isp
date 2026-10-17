@@ -16,7 +16,7 @@ export class AppError extends Error {
 export const unauthorized = () => new AppError(401, 'Não autenticado', 'Faça login para continuar.');
 export const forbidden = (detail = 'Você não tem permissão para esta ação.') => new AppError(403, 'Acesso negado', detail);
 /** Também usado para recursos de outro tenant: não revela existência. */
-export const notFound = (what = 'Registro') => new AppError(404, 'Não encontrado', `${what} não encontrado.`);
+export const notFound = (detail = 'Registro não encontrado.') => new AppError(404, 'Não encontrado', detail);
 export const conflict = (currentRowVersion: number) =>
   new AppError(409, 'Conflito de versão', 'Este registro foi alterado por outra pessoa. Recarregue para ver a versão atual.', { currentRowVersion });
 export const unprocessable = (detail: string, errors?: Problem['errors']) => new AppError(422, 'Dados inválidos', detail, { errors });

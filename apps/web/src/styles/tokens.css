@@ -1,0 +1,88 @@
+/*
+ * Tokens semânticos — ÚNICA fonte de cor, raio e sombra da interface (spec §3).
+ * Componentes usam as classes Tailwind mapeadas para estas variáveis; nada de hex solto.
+ * Valores em canais RGB para permitir opacidade (rgb(var(--x) / .5)).
+ */
+:root {
+  --background: 245 247 249;      /* #F5F7F9 */
+  --surface: 255 255 255;
+  --surface-raised: 255 255 255;
+  --surface-sunken: 238 241 244;  /* #EEF1F4 */
+  --border: 218 223 229;          /* #DADFE5 */
+  --border-strong: 190 198 207;
+  --text-primary: 27 36 48;       /* #1B2430 */
+  --text-secondary: 84 95 110;    /* #545F6E — AA sobre branco e sobre background */
+  --text-inverse: 255 255 255;
+
+  --primary: 10 112 122;          /* #0A707A teal "fibra" — AA para texto branco */
+  --primary-hover: 7 92 101;
+  --primary-soft: 224 242 243;
+
+  --success: 22 117 72;           /* #167548 */
+  --success-soft: 222 243 232;
+  --warning: 158 92 0;            /* #9E5C00 — âmbar escuro, AA */
+  --warning-soft: 253 240 216;
+  --danger: 180 35 24;            /* #B42318 */
+  --danger-soft: 253 228 226;
+  --info: 37 87 168;
+  --info-soft: 226 235 251;
+  --focus: 37 99 235;
+
+  --sidebar: 23 33 43;            /* #17212B ardósia */
+  --sidebar-text: 196 205 215;
+  --sidebar-active: 255 255 255;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-overlay: 0 12px 32px rgb(16 24 32 / 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --background: 15 20 26;
+    --surface: 22 29 37;
+    --surface-raised: 29 38 48;
+    --surface-sunken: 18 24 31;
+    --border: 48 59 71;
+    --border-strong: 70 83 98;
+    --text-primary: 232 236 241;
+    --text-secondary: 160 172 186;
+    --primary: 56 178 190;
+    --primary-hover: 92 196 206;
+    --primary-soft: 18 52 58;
+    --success: 74 192 133;
+    --success-soft: 20 52 38;
+    --warning: 236 168 70;
+    --warning-soft: 60 42 14;
+    --danger: 248 113 104;
+    --danger-soft: 66 24 22;
+    --info: 120 160 240;
+    --info-soft: 24 36 64;
+    --sidebar: 12 17 22;
+    --text-inverse: 10 14 18;
+  }
+}
+:root[data-theme='dark'] {
+  --background: 15 20 26;
+  --surface: 22 29 37;
+  --surface-raised: 29 38 48;
+  --surface-sunken: 18 24 31;
+  --border: 48 59 71;
+  --border-strong: 70 83 98;
+  --text-primary: 232 236 241;
+  --text-secondary: 160 172 186;
+  --primary: 56 178 190;
+  --primary-hover: 92 196 206;
+  --primary-soft: 18 52 58;
+  --success: 74 192 133;
+  --success-soft: 20 52 38;
+  --warning: 236 168 70;
+  --warning-soft: 60 42 14;
+  --danger: 248 113 104;
+  --danger-soft: 66 24 22;
+  --info: 120 160 240;
+  --info-soft: 24 36 64;
+  --sidebar: 12 17 22;
+  --text-inverse: 10 14 18;
+}

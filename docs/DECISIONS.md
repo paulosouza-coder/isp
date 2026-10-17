@@ -43,3 +43,12 @@ Nomes, telefones e endereços gerados; nenhum dado real. A seed usa semente fixa
 
 ## ADR-012 — Ambiente de desenvolvimento sem Docker disponível
 Nesta sessão o daemon Docker não está acessível; foi usado o PostgreSQL 16 local com as mesmas credenciais do `docker-compose.yml`. O compose segue sendo o caminho documentado.
+
+## ADR-013 — Paginação por offset nas tabelas da Fase 1
+Tabelas com ordenação por várias colunas usam `page/pageSize` com total. Suficiente para milhares de registros; cursor entra onde o volume exigir (Fase 3+). **(reversível)**
+
+## ADR-014 — Autosave do workspace com rascunho local
+Debounce de 900 ms, `PATCH` só dos campos alterados com `rowVersion`; rascunho em `localStorage` (mesma versão do servidor) recuperado após refresh com aviso; flush com `keepalive` ao sair; 409 mostra banner e nunca sobrescreve em silêncio.
+
+## ADR-015 — E2E isolado
+Playwright sobe API (:3334) e web (:5174) próprios contra `isp_sprint_test`, recriado no início. `PW_CHROMIUM_PATH` permite usar Chromium local quando o download é bloqueado.
