@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { MODULES, mergeLevels, type AccessLevel, type Module } from '@isp/domain';
 import type { DB } from '../db/client';
 import type { Config } from '../config';
@@ -81,9 +81,13 @@ export async function resolveSession(app: FastifyInstance, req: FastifyRequest):
     ? await app.db.select({ userId: s.teamMemberships.userId }).from(s.teamMemberships).where(inArray(s.teamMemberships.teamId, ledTeams))
     : [];
 
-  if (now.getTime() - row.lastSeenAt.getTime() > 60_000) {
-    await app.db.update(s.sessions).set({ lastSeenAt: now }).where(eq(s.sessions.id, row.sessionId));
-  }
+if (now.getTime() - row.lastSeenAt.getTime() > 60_000) {
+  await app.db.execute(
+    sql`UPDATE ${s.sessions}
+        SET ${s.sessions.lastSeenAt} = ${now}
+        WHERE ${s.sessions.id} = ${row.sessionId}`
+  );
+}
 
   return {
     sessionId: row.sessionId,
